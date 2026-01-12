@@ -65,6 +65,18 @@ The hub client provides these methods (used by this project):
 - `create_contact_biographic(contact_id, **fields)` - Create biographic
 - `update_contact_biographic(biographic_id, fields)` - Update biographic (PATCH)
 
+**Relationship Operations:**
+- `add_contact_relative(primary_id, related_id, relationship, **kwargs)` - Link contacts as relatives
+- `search_contact_relationships(primary_contact_id)` - Get linked relatives
+- `update_contact_relationship(relationship_id, fields)` - Update relationship
+- `delete_contact_relationship(relationship_id)` - Remove link
+
+**History Record Operations:**
+- `create_address(contact_id, line1, city, state, ...)` - Create address record
+- `create_employment(contact_id, occupation, start_date, ...)` - Create employment record
+- `create_education(contact_id, institution_name, ...)` - Create education record
+- `create_travel_history(contact_id, arrival_date, ...)` - Create travel record
+
 **Notes:**
 - `create_note(subject, body, contact_id, category, ...)` - Create note
 
@@ -122,6 +134,8 @@ result = gui.run()
 
 ## Version History
 
+- **v2.3.0** - History as proper InfoTems records (Address, Employment, Education, Travel), full biographic data for family members
+- **v2.2.0** - Full family member relationship linking via `add_contact_relative()`
 - **v2.1.0** - Hub/spoke architecture documentation, explicit InfoTems client dependency
 - **v2.0.0** - Family member search/link/create, history records, comprehensive approval GUI
 - **v1.0.0** - Initial release with basic extraction and comparison

@@ -12,7 +12,7 @@ https://github.com/Weskye13/AI-Document-Analyzer
 
 ---
 
-## Current State: v2.2 - Ready for Testing
+## Current State: v2.3 - Ready for Testing
 
 ### What's Built
 
@@ -26,6 +26,8 @@ https://github.com/Weskye13/AI-Document-Analyzer
    - Compares extracted data with existing records
    - Generates ChangeSet with all proposed changes
    - **Full family member relationship linking** via `add_contact_relative()`
+   - **Full biographic data** for new family members (DOB, birthplace, citizenship, etc.)
+   - **History as proper records** (Address, Employment, Education, Travel)
    - **Depends exclusively on InfotemsHybridClient** (hub-spoke architecture)
 
 3. **Approval GUI** (`approval_gui.py`)
@@ -170,9 +172,14 @@ Recommended test files:
 ### Apply Phase
 - Creates/updates Contact record
 - Creates/updates ContactBiographic record
-- Creates new contacts for family members AND links them as relatives
-- Supports relationship metadata: marriage date/location, immigration flags
-- Saves history as formatted case notes
+- Creates new contacts for family members with FULL biographic data
+- Links family members as relatives with marriage dates/locations, immigration flags
+- **NEW in v2.3**: Saves history as proper InfoTems records:
+  - Address history → Address records
+  - Employment history → Employment records
+  - Education history → Education records
+  - Travel history → TravelHistory records
+- Unsupported history types fall back to case notes
 
 ---
 
@@ -180,7 +187,9 @@ Recommended test files:
 
 1. **Handwriting Recognition**: Confidence scores reflect OCR quality - handwritten forms may have lower accuracy
 
-2. **History to Primary Fields**: Current address/employment should auto-populate primary contact fields - logic exists but needs testing
+2. **Employer Companies**: Employment records currently don't create/link Company records - just stores occupation
+
+3. **History to Primary Fields**: Current address/employment should auto-populate primary contact fields - logic exists but needs testing
 
 ---
 
@@ -201,6 +210,9 @@ Recommended test files:
 
 1. Test with 2-3 different filled questionnaires
 2. Note any extraction errors or missing fields
-3. Verify InfoTems updates are correct
-4. Consider adding `add_contact_relative()` to InfotemsHybridClient for family linking
-5. Test batch processing multiple documents
+3. Verify InfoTems records are created correctly:
+   - Check Contact and ContactBiographic for family members
+   - Verify ContactRelationship links
+   - Confirm Address/Employment/Education/Travel records
+4. Test batch processing multiple documents
+5. Consider adding Company creation for employment records
