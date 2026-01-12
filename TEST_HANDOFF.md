@@ -12,16 +12,30 @@ https://github.com/Weskye13/AI-Document-Analyzer
 
 ---
 
-## Current State: v2.3 - Ready for Testing
+## Current State: v2.4 - Ready for Testing
 
 ### What's Built
 
-1. **Document Extractor** (`document_extractor.py`)
-   - AI-powered extraction using Claude Vision
+1. **Enhanced Document Extractor** (`enhanced_extractor.py`) - NEW in v2.4
+   - Multi-pass extraction with self-critique
+   - Cross-validation using multiple prompt strategies
+   - Confidence-based re-extraction for unclear fields
+   - Family member verification (two-pass)
+   - Iterative refinement until quality threshold met
+   - Full metrics tracking
+
+2. **Extraction Validator** (`extraction_validator.py`) - NEW in v2.4
+   - Validates extracted data for logical consistency
+   - Catches date errors, A-number format issues
+   - Required field checking by document type
+   - Low confidence flagging
+
+3. **Document Extractor** (`document_extractor.py`)
+   - Basic single-pass extraction using Claude Vision
    - Supports PDF and image files
    - Extracts: primary fields, family members, history records
 
-2. **InfoTems Comparator** (`infotems_comparator.py`)
+4. **InfoTems Comparator** (`infotems_comparator.py`)
    - Searches InfoTems for existing contacts (by A-number, name+DOB, name)
    - Compares extracted data with existing records
    - Generates ChangeSet with all proposed changes
@@ -64,7 +78,40 @@ https://github.com/Weskye13/AI-Document-Analyzer
    pip install anthropic pymupdf python-dotenv
    ```
 
-### Test 1: Basic Extraction (No InfoTems)
+### Test 1: Enhanced Extraction (NEW - Recommended)
+
+```python
+from enhanced_extractor import EnhancedDocumentExtractor
+
+# Enhanced mode with all improvements
+extractor = EnhancedDocumentExtractor(verbose=True, use_enhanced=True)
+
+# Use a filled questionnaire PDF
+result = extractor.extract_from_file(r"path\to\filled_questionnaire.pdf")
+
+print(f"Document Type: {result['document_type']}")
+print(f"Confidence: {result['confidence']:.0%}")
+print(f"Fields extracted: {len(result['fields'])}")
+print(f"Family members: {len(result['family_members'])}")
+print(f"Extraction mode: {result['extraction_mode']}")
+
+# View metrics
+metrics = result.get('extraction_metrics', {})
+print(f"\nMetrics:")
+print(f"  Iterations: {metrics.get('iterations', 1)}")
+print(f"  API calls: {metrics.get('total_api_calls', 1)}")
+print(f"  Strategies used: {metrics.get('strategies_used', [])}")
+print(f"  Critique corrections: {metrics.get('critique_corrections', 0)}")
+print(f"  Validation errors: {metrics.get('validation_errors_initial', 0)} → {metrics.get('validation_errors_final', 0)}")
+
+# View validation result
+validation = result.get('validation_result', {})
+print(f"\nValidation: {'PASS' if validation.get('is_valid') else 'FAIL'}")
+print(f"  Errors: {validation.get('error_count', 0)}")
+print(f"  Warnings: {validation.get('warning_count', 0)}")
+```
+
+### Test 2: Basic Extraction (Single-Pass)
 
 ```python
 from document_extractor import DocumentExtractor
@@ -81,7 +128,7 @@ print(f"Family members: {len(result['family_members'])}")
 print(f"History records: {sum(len(v) for v in result['history'].values())}")
 ```
 
-### Test 2: Full Pipeline with Comparison
+### Test 3: Full Pipeline with Comparison
 
 ```python
 from document_extractor import DocumentExtractor
@@ -198,11 +245,13 @@ Recommended test files:
 | File | Purpose |
 |------|---------|
 | `main.py` | Entry point, GUI and CLI |
-| `document_extractor.py` | AI extraction logic |
+| `enhanced_extractor.py` | **NEW** Multi-pass extraction with self-critique |
+| `extraction_validator.py` | **NEW** Validation layer for logical consistency |
+| `document_extractor.py` | Basic single-pass extraction (fallback) |
 | `infotems_comparator.py` | InfoTems search/compare/apply |
 | `approval_gui.py` | Tkinter approval interface |
 | `config.py` | All field mappings and configs |
-| `QUESTIONNAIRE_MAPPINGS_PROPOSAL.md` | Design document |
+| `CHANGELOG.md` | Version history |
 
 ---
 

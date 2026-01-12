@@ -90,9 +90,11 @@ If this project needs new InfoTems functionality:
 
 ## Features
 
-- **Document Extraction**: Uses Claude Vision AI to extract data from questionnaires, passports, EADs
-- **Family Member Handling**: Search, link, or create contacts for family members
-- **History Records**: Address, employment, education history as structured data
+- **Enhanced Multi-Pass Extraction**: Uses Claude Vision AI with self-critique, validation, and iterative refinement
+- **Cross-Validation**: Multiple extraction strategies find consensus for higher accuracy
+- **Validation Layer**: Catches logical errors (impossible dates, format issues) before comparison
+- **Family Member Handling**: Search, link, or create contacts with full biographic data
+- **History as Proper Records**: Address, employment, education, travel saved as InfoTems records
 - **Approval Workflow**: All changes require user approval before applying
 - **Editable Interface**: All extracted data can be modified before saving
 
@@ -134,6 +136,7 @@ result = gui.run()
 
 ## Version History
 
+- **v2.4.0** - Enhanced multi-pass extraction with self-critique, validation, and iterative refinement (Ralph Brainstormer pattern)
 - **v2.3.0** - History as proper InfoTems records (Address, Employment, Education, Travel), full biographic data for family members
 - **v2.2.0** - Full family member relationship linking via `add_contact_relative()`
 - **v2.1.0** - Hub/spoke architecture documentation, explicit InfoTems client dependency

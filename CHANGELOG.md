@@ -4,6 +4,68 @@ All notable changes to the AI Document Analyzer project.
 
 ---
 
+## [2.4.0] - 2026-01-11
+
+### Added - Enhanced Multi-Pass Extraction (Ralph Brainstormer Pattern)
+
+Inspired by the "Debate & Consensus" workflow from ralph-brainstormer, this release adds a sophisticated multi-pass extraction system for significantly higher accuracy.
+
+**New Files:**
+- `enhanced_extractor.py` - Multi-pass extraction engine
+- `extraction_validator.py` - Validation layer for logical consistency
+
+**6 New Improvements:**
+
+1. **Self-Critique Pass** - AI reviews its own extraction for errors
+   - Checks for swapped values, OCR errors, format issues
+   - Returns corrections with explanations
+   
+2. **Confidence-Based Re-Extraction** - Low-confidence fields get retried
+   - Fields below 70% confidence are re-extracted with focused prompts
+   - Only updates if confidence improves
+
+3. **Cross-Validation Extraction** - Multiple prompt strategies find consensus
+   - STRUCTURED: Direct JSON schema extraction
+   - NARRATIVE: Describe document then extract
+   - Merges best results from each strategy
+
+4. **Validation Layer** - Logical consistency checks before comparison
+   - Date consistency (DOB vs entry date vs marriage date)
+   - A-number format validation
+   - Required fields by document type
+   - Name field validation (swapped names, all caps)
+   - Low confidence flagging
+
+5. **Iterative Improvement Loop** - Refine until quality threshold met
+   - Maximum 3 iterations
+   - Continues until validation errors resolved
+   - Feeds errors back for targeted fixes
+
+6. **Family Member Verification** - Two-pass extraction for family data
+   - Verifies each family member exists in document
+   - Extracts additional fields (DOB, citizenship, A-number)
+   - Removes false positives
+
+**Usage:**
+
+```bash
+# Enhanced mode (default)
+python main.py document.pdf
+
+# Basic single-pass mode
+python main.py document.pdf --basic
+```
+
+**Metrics Tracking:**
+- Iterations count
+- Total API calls
+- Strategies used
+- Validation errors (initial vs final)
+- Low confidence fields (initial vs final)
+- Critique corrections made
+
+---
+
 ## [2.3.0] - 2026-01-11
 
 ### Changed - History Records Now Proper InfoTems Records

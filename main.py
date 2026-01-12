@@ -29,6 +29,7 @@ import argparse
 
 from config import UI_CONFIG, DOCUMENT_TYPES, SCRIPT_DIR
 from document_extractor import DocumentExtractor
+from enhanced_extractor import EnhancedDocumentExtractor
 from infotems_comparator import InfotemsComparator, ChangeSet
 from approval_gui import ChangeReviewGUI, BatchReviewGUI
 
@@ -71,10 +72,16 @@ class DocumentAnalyzerApp:
     def _init_components(self):
         """Initialize extractor and comparator components."""
         try:
-            self.extractor = DocumentExtractor(verbose=False)
-            self.log("✓ AI Extractor ready")
+            # Use enhanced extractor by default for better accuracy
+            self.extractor = EnhancedDocumentExtractor(verbose=False, use_enhanced=True)
+            self.log("✓ Enhanced AI Extractor ready (multi-pass mode)")
         except Exception as e:
-            self.log(f"⚠ AI Extractor error: {e}", 'error')
+            # Fall back to basic extractor
+            try:
+                self.extractor = DocumentExtractor(verbose=False)
+                self.log("✓ Basic AI Extractor ready")
+            except Exception as e2:
+                self.log(f"⚠ AI Extractor error: {e2}", 'error')
         
         try:
             self.comparator = InfotemsComparator(verbose=False)
@@ -574,7 +581,7 @@ For support, contact the IT department."""
 # CLI INTERFACE
 # ============================================================================
 
-def process_document_cli(file_path: str, doc_type: str = None, apply: bool = False):
+def process_document_cli(file_path: str, doc_type: str = None, apply: bool = False, use_enhanced: bool = True):
     """
     Process a document via CLI.
     
@@ -582,6 +589,7 @@ def process_document_cli(file_path: str, doc_type: str = None, apply: bool = Fal
         file_path: Path to document
         doc_type: Document type (or None for auto-detect)
         apply: Whether to apply changes without review
+        use_enhanced: Use multi-pass enhanced extraction (default True)
     """
     print("\n" + "="*60)
     print("AI DOCUMENT ANALYZER - CLI MODE")
@@ -589,12 +597,20 @@ def process_document_cli(file_path: str, doc_type: str = None, apply: bool = Fal
     
     # Initialize
     print("\n[1/4] Initializing...")
-    extractor = DocumentExtractor(verbose=True)
+    if use_enhanced:
+        extractor = EnhancedDocumentExtractor(verbose=True, use_enhanced=True)
+        print("Using: Enhanced multi-pass extraction")
+    else:
+        extractor = DocumentExtractor(verbose=True)
+        print("Using: Basic single-pass extraction")
     comparator = InfotemsComparator(verbose=True)
     
     # Extract
     print("\n[2/4] Extracting data...")
-    extracted = extractor.extract_data(file_path, doc_type)
+    if use_enhanced:
+        extracted = extractor.extract_from_file(file_path)
+    else:
+        extracted = extractor.extract_data(file_path, doc_type)
     
     if extracted.get('errors'):
         print("\n❌ Extraction errors:")
@@ -665,6 +681,11 @@ def main():
         help='Apply changes without review (CLI only)'
     )
     parser.add_argument(
+        '--basic', '-b',
+        action='store_true',
+        help='Use basic single-pass extraction instead of enhanced multi-pass'
+    )
+    parser.add_argument(
         '--gui',
         action='store_true',
         help='Force GUI mode even with file argument'
@@ -674,7 +695,7 @@ def main():
     
     if args.file and not args.gui:
         # CLI mode
-        process_document_cli(args.file, args.type, args.apply)
+        process_document_cli(args.file, args.type, args.apply, use_enhanced=not args.basic)
     else:
         # GUI mode
         app = DocumentAnalyzerApp()
