@@ -42,15 +42,52 @@ from config import (
 # ============================================================================
 # INFOTEMS CLIENT IMPORT - SINGLE SOURCE OF TRUTH
 # ============================================================================
-# The InfoTems Hybrid Client is the ONLY authorized way to interact with InfoTems.
-# It is located at: ..\New Official Infotems API\infotems_hybrid_client.py
-# ALL API methods, field names, and data structures are defined there.
+# 
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  CRITICAL: The InfoTems Hybrid Client is the ONLY authorized way to      ║
+# ║  interact with InfoTems. NO direct API calls are permitted here.         ║
+# ║                                                                          ║
+# ║  Hub Location: ..\New Official Infotems API\infotems_hybrid_client.py   ║
+# ║                                                                          ║
+# ║  If you need new InfoTems functionality:                                 ║
+# ║  1. Add the method to infotems_hybrid_client.py FIRST                   ║
+# ║  2. Then import and use it here                                          ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+INFOTEMS_HUB_PATH = r"..\New Official Infotems API\infotems_hybrid_client.py"
 
 try:
     from infotems_hybrid_client import InfotemsHybridClient
     INFOTEMS_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     INFOTEMS_AVAILABLE = False
+    _IMPORT_ERROR = str(e)
+
+def _validate_infotems_client():
+    """Validate that the InfoTems hub client is available."""
+    if not INFOTEMS_AVAILABLE:
+        raise ImportError(
+            f"\n"
+            f"{'='*70}\n"
+            f"INFOTEMS HUB CLIENT NOT FOUND\n"
+            f"{'='*70}\n"
+            f"\n"
+            f"This project requires the InfoTems Hybrid Client (the hub).\n"
+            f"\n"
+            f"Expected location:\n"
+            f"  {INFOTEMS_HUB_PATH}\n"
+            f"\n"
+            f"Full path:\n"
+            f"  C:\\Users\\Josh\\Dropbox\\Law Office of Joshua E. Bardavid\\\n"
+            f"  Administrative Docs\\Scripts\\New Official Infotems API\\\n"
+            f"  infotems_hybrid_client.py\n"
+            f"\n"
+            f"The hub client is the SINGLE SOURCE OF TRUTH for all InfoTems\n"
+            f"API operations. Ensure it exists and is in the Python path.\n"
+            f"\n"
+            f"Import error: {_IMPORT_ERROR if '_IMPORT_ERROR' in dir() else 'Unknown'}\n"
+            f"{'='*70}\n"
+        )
 
 
 # ============================================================================
