@@ -112,8 +112,9 @@ class FamilyMemberAction(Enum):
 
 class HistoryAction(Enum):
     """Action for history records."""
-    SAVE_TO_NOTES = 'save_to_notes'  # Save as formatted case note
-    SKIP = 'skip'                     # Don't save
+    SAVE_AS_RECORDS = 'save_as_records'  # Save as proper InfoTems records (Address, Employment, Education, Travel)
+    SAVE_TO_NOTES = 'save_to_notes'       # Save as formatted case note (fallback)
+    SKIP = 'skip'                          # Don't save
 
 
 # ============================================================================
@@ -244,9 +245,17 @@ class HistoryRecord:
 @dataclass
 class HistorySet:
     """Collection of history records of one type."""
-    history_type: str  # 'address', 'employment', 'education', etc.
+    history_type: str  # 'address', 'employment', 'education', 'travel', etc.
     records: List[HistoryRecord] = field(default_factory=list)
-    action: HistoryAction = HistoryAction.SAVE_TO_NOTES
+    action: HistoryAction = HistoryAction.SAVE_AS_RECORDS  # Default to proper records
+    
+    # History types that support proper InfoTems records
+    RECORD_SUPPORTED_TYPES = {'address', 'employment', 'education', 'travel'}
+    
+    @property
+    def supports_records(self) -> bool:
+        """Check if this history type supports proper InfoTems records."""
+        return self.history_type in self.RECORD_SUPPORTED_TYPES
     
     @property
     def display_name(self) -> str:
@@ -321,7 +330,7 @@ class ChangeSet:
         """Count of history records to save."""
         count = 0
         for hs in self.history.values():
-            if hs.action == HistoryAction.SAVE_TO_NOTES:
+            if hs.action in (HistoryAction.SAVE_AS_RECORDS, HistoryAction.SAVE_TO_NOTES):
                 count += len(hs.records)
         return count
     
@@ -377,7 +386,13 @@ class InfotemsComparator:
     - update_contact_relationship(relationship_id, fields) -> Update relationship
     - delete_contact_relationship(relationship_id) -> Remove link
     
-    NOTES:
+    HISTORY RECORDS (v3.0 - Proper Structured Records):
+    - create_address(contact_id, line1, city, state, ...) -> Address record
+    - create_employment(contact_id, occupation, start_date, ...) -> Employment record
+    - create_education(contact_id, institution_name, ...) -> Education record
+    - create_travel_history(contact_id, arrival_date, ...) -> Travel record
+    
+    NOTES (Fallback for unsupported history types):
     - create_note(subject, body, contact_id, category, ...) -> New note ID
     """
     
@@ -852,8 +867,8 @@ class InfotemsComparator:
             # 2. Apply family member changes
             self._apply_family_changes(change_set, results)
             
-            # 3. Save history as notes
-            self._apply_history_notes(change_set, results)
+            # 3. Save history as proper records (or notes as fallback)
+            self._apply_history_records(change_set, results)
             
             results['success'] = True
             self.log(f"\n   ✅ All changes applied successfully")
@@ -979,13 +994,29 @@ class InfotemsComparator:
                 elif fm.action == FamilyMemberAction.CREATE_NEW:
                     data = fm.final_data
                     
-                    # Create the family member contact
+                    # Create the family member contact with all available fields
+                    contact_fields = {}
+                    if data.get('middle_name'):
+                        contact_fields['MiddleName'] = data['middle_name']
+                    if data.get('maiden_name'):
+                        contact_fields['MaidenName'] = data['maiden_name']
+                    
                     new_id = self.client.create_contact(
                         first_name=data.get('first_name', ''),
                         last_name=data.get('last_name', ''),
+                        **contact_fields
                     )
                     fm_result['contact_id'] = new_id
                     self.log(f"   ✓ Created {fm.relationship}: {fm.display_name} (ID: {new_id})")
+                    
+                    # Create biographic data for the family member
+                    bio_fields = self._build_biographic_fields(data)
+                    if bio_fields and new_id:
+                        try:
+                            self.client.create_contact_biographic(new_id, **bio_fields)
+                            self.log(f"   ✓ Added biographic data ({len(bio_fields)} fields)")
+                        except Exception as bio_err:
+                            self.log(f"   ⚠ Biographic creation failed: {bio_err}")
                     
                     # Link as relative
                     if change_set.contact_id and new_id:
@@ -1068,9 +1099,8 @@ class InfotemsComparator:
         if data.get('date_marriage_ended'):
             kwargs['end_date'] = data['date_marriage_ended']
         
-        # Marriage location
+        # Marriage start location
         if data.get('place_of_marriage'):
-            # Try to parse "City, State, Country" format
             place = data['place_of_marriage']
             parts = [p.strip() for p in place.split(',')]
             if len(parts) >= 1:
@@ -1080,21 +1110,82 @@ class InfotemsComparator:
             if len(parts) >= 3:
                 kwargs['start_country'] = parts[2]
         
+        # Marriage end location (divorce/death location)
+        if data.get('place_marriage_ended'):
+            place = data['place_marriage_ended']
+            parts = [p.strip() for p in place.split(',')]
+            if len(parts) >= 1:
+                kwargs['end_city'] = parts[0]
+            if len(parts) >= 2:
+                kwargs['end_state'] = parts[1]
+            if len(parts) >= 3:
+                kwargs['end_country'] = parts[2]
+        
         # Immigration flags
         if data.get('include_in_application') is not None:
             kwargs['are_filing_immigration_benefit_together'] = bool(data['include_in_application'])
         if data.get('resides_with_applicant') is not None:
             kwargs['does_related_contact_reside_with_primary_contact'] = bool(data['resides_with_applicant'])
+            # If they reside together, they're household members
+            kwargs['are_household_members'] = bool(data['resides_with_applicant'])
         if data.get('will_accompany') is not None:
             kwargs['will_related_contact_accompany'] = bool(data['will_accompany'])
         if data.get('will_immigrate_later') is not None:
             kwargs['will_related_contact_immigrate_later'] = bool(data['will_immigrate_later'])
+        if data.get('is_step') is not None:
+            kwargs['is_step'] = bool(data['is_step'])
+        if data.get('is_adopted') is not None:
+            kwargs['is_related_contact_adopted'] = bool(data['is_adopted'])
         
-        # For prior spouse, mark as ended
+        # For prior spouse, mark as estranged if no end_date
         if fm.relationship == 'prior_spouse' and 'end_date' not in kwargs:
             kwargs['are_estranged'] = True
         
         return kwargs
+    
+    def _build_biographic_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build biographic fields for create_contact_biographic() from extracted data.
+        
+        Maps questionnaire fields to InfoTems ContactBiographic fields.
+        """
+        fields = {}
+        
+        # A-number
+        if data.get('a_number'):
+            fields['AlienNumber'] = data['a_number']
+        
+        # Birth information
+        if data.get('date_of_birth'):
+            fields['BirthDate'] = data['date_of_birth']
+        if data.get('city_of_birth'):
+            fields['BirthCity'] = data['city_of_birth']
+        if data.get('state_of_birth'):
+            fields['BirthState'] = data['state_of_birth']
+        if data.get('country_of_birth'):
+            fields['BirthCountry'] = data['country_of_birth']
+        
+        # Demographics
+        if data.get('gender'):
+            fields['Gender'] = data['gender']
+        if data.get('citizenship'):
+            fields['Citizenship1Country'] = data['citizenship']
+        if data.get('ethnicity'):
+            fields['Ethnicity'] = data['ethnicity']
+        if data.get('race'):
+            fields['Race'] = data['race']
+        
+        # Immigration status
+        if data.get('immigration_status'):
+            fields['CurrentImmigrationStatus'] = data['immigration_status']
+        if data.get('date_of_entry'):
+            fields['DateOfLastEntryToUSA'] = data['date_of_entry']
+        
+        # SSN (only if provided)
+        if data.get('ssn'):
+            fields['SSN'] = data['ssn']
+        
+        return fields
     
     def get_contact_relatives(self, contact_id: int) -> List[Dict[str, Any]]:
         """
@@ -1116,55 +1207,182 @@ class InfotemsComparator:
         except Exception:
             return []
     
-    def _apply_history_notes(self, change_set: ChangeSet, results: Dict):
+    def _apply_history_records(self, change_set: ChangeSet, results: Dict):
         """
-        Save history records as case notes.
-        Uses client.create_note() from InfotemsHybridClient.
+        Save history as proper InfoTems records or notes.
+        
+        Uses InfotemsHybridClient methods:
+        - create_address() for address history
+        - create_employment() for employment history  
+        - create_education() for education history
+        - create_travel_history() for travel/entry history
+        - create_note() for unsupported history types (fallback)
         """
         if not change_set.contact_id:
             return
         
         for history_type, history_set in change_set.history.items():
-            if history_set.action != HistoryAction.SAVE_TO_NOTES:
+            if history_set.action == HistoryAction.SKIP:
                 continue
             
             if not history_set.records:
                 continue
             
-            note_result = {
-                'type': history_type,
-                'record_count': len(history_set.records),
-                'success': False,
-            }
+            # Route to appropriate handler based on action and type
+            if history_set.action == HistoryAction.SAVE_AS_RECORDS and history_set.supports_records:
+                self._create_history_records(change_set.contact_id, history_set, results)
+            else:
+                # Fallback to notes for unsupported types
+                self._create_history_note(change_set.contact_id, history_set, results)
+    
+    def _create_history_records(self, contact_id: int, history_set: HistorySet, results: Dict):
+        """Create proper InfoTems records for supported history types."""
+        
+        record_results = {
+            'type': history_set.history_type,
+            'record_count': len(history_set.records),
+            'created_ids': [],
+            'success': False,
+        }
+        
+        try:
+            for record in history_set.records:
+                data = record.final_data
+                record_id = None
+                
+                if history_set.history_type == 'address':
+                    record_id = self._create_address_record(contact_id, data)
+                elif history_set.history_type == 'employment':
+                    record_id = self._create_employment_record(contact_id, data)
+                elif history_set.history_type == 'education':
+                    record_id = self._create_education_record(contact_id, data)
+                elif history_set.history_type == 'travel':
+                    record_id = self._create_travel_record(contact_id, data)
+                
+                if record_id:
+                    record_results['created_ids'].append(record_id)
             
-            try:
-                # Build formatted note content
-                content = self._format_history_note(history_set)
-                
-                # Get category from config
-                category = HISTORY_TYPES.get(history_type, {}).get(
-                    'note_category', 'Case Status'
-                )
-                
-                # Create note using client.create_note()
-                subject = f"{history_set.display_name} - {datetime.now().strftime('%m/%d/%Y')}"
-                
-                note_id = self.client.create_note(
-                    subject=subject,
-                    body=content,
-                    contact_id=change_set.contact_id,
-                    category=category
-                )
-                
-                note_result['success'] = True
-                note_result['note_id'] = note_id
-                self.log(f"   ✓ Saved {history_set.display_name} ({len(history_set.records)} records)")
-                
-            except Exception as e:
-                note_result['error'] = str(e)
-                results['errors'].append(f"History {history_type}: {e}")
+            record_results['success'] = len(record_results['created_ids']) > 0
+            self.log(f"   ✓ Created {len(record_results['created_ids'])} {history_set.display_name} records")
             
-            results['history_notes'].append(note_result)
+        except Exception as e:
+            record_results['error'] = str(e)
+            results['errors'].append(f"History {history_set.history_type}: {e}")
+        
+        results['history_notes'].append(record_results)
+    
+    def _create_address_record(self, contact_id: int, data: Dict[str, Any]) -> Optional[int]:
+        """Create an Address record in InfoTems."""
+        kwargs = {'contact_id': contact_id}
+        
+        if data.get('street') or data.get('address_line1'):
+            kwargs['line1'] = data.get('street') or data.get('address_line1')
+        if data.get('apt') or data.get('address_line2'):
+            kwargs['Line2'] = data.get('apt') or data.get('address_line2')
+        if data.get('city'):
+            kwargs['city'] = data['city']
+        if data.get('state'):
+            kwargs['state'] = data['state']
+        if data.get('country'):
+            kwargs['country'] = data['country']
+        if data.get('zip') or data.get('postal_code'):
+            kwargs['postal_zip_code'] = data.get('zip') or data.get('postal_code')
+        if data.get('from_date'):
+            kwargs['StartDate'] = data['from_date']
+        if data.get('to_date'):
+            kwargs['EndDate'] = data['to_date']
+        
+        result = self.client.create_address(**kwargs)
+        return result.get('Id') if result else None
+    
+    def _create_employment_record(self, contact_id: int, data: Dict[str, Any]) -> Optional[int]:
+        """Create an Employment record in InfoTems."""
+        kwargs = {'contact_id': contact_id}
+        
+        if data.get('employer') or data.get('company_name'):
+            # Note: Ideally we'd create/find a Company first, but for now use occupation
+            kwargs['occupation'] = data.get('job_title') or data.get('position') or 'Employee'
+        if data.get('job_title') or data.get('position'):
+            kwargs['occupation'] = data.get('job_title') or data.get('position')
+        if data.get('from_date'):
+            kwargs['start_date'] = data['from_date']
+        if data.get('to_date'):
+            kwargs['end_date'] = data['to_date']
+        
+        result = self.client.create_employment(**kwargs)
+        return result.get('Id') if result else None
+    
+    def _create_education_record(self, contact_id: int, data: Dict[str, Any]) -> Optional[int]:
+        """Create an Education record in InfoTems."""
+        kwargs = {'contact_id': contact_id}
+        
+        if data.get('school') or data.get('institution'):
+            kwargs['institution_name'] = data.get('school') or data.get('institution')
+        if data.get('degree') or data.get('program'):
+            kwargs['program_of_study'] = data.get('degree') or data.get('program')
+        if data.get('city'):
+            kwargs['city'] = data['city']
+        if data.get('country'):
+            kwargs['country'] = data['country']
+        if data.get('from_date'):
+            kwargs['start_date'] = data['from_date']
+        if data.get('to_date'):
+            kwargs['end_date'] = data['to_date']
+        
+        result = self.client.create_education(**kwargs)
+        return result.get('Id') if result else None
+    
+    def _create_travel_record(self, contact_id: int, data: Dict[str, Any]) -> Optional[int]:
+        """Create a TravelHistory record in InfoTems."""
+        kwargs = {'contact_id': contact_id}
+        
+        if data.get('arrival_date') or data.get('entry_date'):
+            kwargs['arrival_date'] = data.get('arrival_date') or data.get('entry_date')
+        if data.get('departure_date') or data.get('exit_date'):
+            kwargs['departure_date'] = data.get('departure_date') or data.get('exit_date')
+        if data.get('port_of_entry') or data.get('arrival_city'):
+            kwargs['arrival_city'] = data.get('port_of_entry') or data.get('arrival_city')
+        if data.get('arrival_state'):
+            kwargs['arrival_state'] = data['arrival_state']
+        if data.get('status_on_entry') or data.get('immigration_status'):
+            kwargs['immigration_status_on_arrival'] = data.get('status_on_entry') or data.get('immigration_status')
+        if data.get('countries_visited'):
+            kwargs['visited_countries'] = data['countries_visited']
+        
+        result = self.client.create_travel_history(**kwargs)
+        return result.get('Id') if result else None
+    
+    def _create_history_note(self, contact_id: int, history_set: HistorySet, results: Dict):
+        """Fallback: Save history as a formatted note."""
+        note_result = {
+            'type': history_set.history_type,
+            'record_count': len(history_set.records),
+            'success': False,
+        }
+        
+        try:
+            content = self._format_history_note(history_set)
+            category = HISTORY_TYPES.get(history_set.history_type, {}).get(
+                'note_category', 'Case Status'
+            )
+            subject = f"{history_set.display_name} - {datetime.now().strftime('%m/%d/%Y')}"
+            
+            note_id = self.client.create_note(
+                subject=subject,
+                body=content,
+                contact_id=contact_id,
+                category=category
+            )
+            
+            note_result['success'] = True
+            note_result['note_id'] = note_id
+            self.log(f"   ✓ Saved {history_set.display_name} as note ({len(history_set.records)} records)")
+            
+        except Exception as e:
+            note_result['error'] = str(e)
+            results['errors'].append(f"History {history_set.history_type}: {e}")
+        
+        results['history_notes'].append(note_result)
     
     def _format_history_note(self, history_set: HistorySet) -> str:
         """Format history records as note content."""
