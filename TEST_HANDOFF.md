@@ -12,7 +12,7 @@ https://github.com/Weskye13/AI-Document-Analyzer
 
 ---
 
-## Current State: v2.1 - Ready for Testing
+## Current State: v2.2 - Ready for Testing
 
 ### What's Built
 
@@ -25,6 +25,7 @@ https://github.com/Weskye13/AI-Document-Analyzer
    - Searches InfoTems for existing contacts (by A-number, name+DOB, name)
    - Compares extracted data with existing records
    - Generates ChangeSet with all proposed changes
+   - **Full family member relationship linking** via `add_contact_relative()`
    - **Depends exclusively on InfotemsHybridClient** (hub-spoke architecture)
 
 3. **Approval GUI** (`approval_gui.py`)
@@ -169,18 +170,17 @@ Recommended test files:
 ### Apply Phase
 - Creates/updates Contact record
 - Creates/updates ContactBiographic record
-- Creates new contacts for family members (linking not yet implemented)
+- Creates new contacts for family members AND links them as relatives
+- Supports relationship metadata: marriage date/location, immigration flags
 - Saves history as formatted case notes
 
 ---
 
 ## Known Limitations
 
-1. **Family Member Linking**: Creating new family contacts works, but linking them as relatives to the primary contact requires `add_contact_relative()` method in InfotemsHybridClient (not yet implemented)
+1. **Handwriting Recognition**: Confidence scores reflect OCR quality - handwritten forms may have lower accuracy
 
 2. **History to Primary Fields**: Current address/employment should auto-populate primary contact fields - logic exists but needs testing
-
-3. **Handwriting Recognition**: Confidence scores reflect OCR quality - handwritten forms may have lower accuracy
 
 ---
 
