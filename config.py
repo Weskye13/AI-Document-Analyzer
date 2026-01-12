@@ -14,6 +14,28 @@ DESIGN PRINCIPLES:
 - Family members are full contacts - can be searched, linked, or created
 - History is structured data - address, employment, education as reviewable records
 - Approval window is fully editable - user can modify any field before applying
+
+INFOTEMS API DEPENDENCY:
+========================
+This project depends EXCLUSIVELY on the InfoTems Hybrid Client located at:
+    ..\New Official Infotems API\infotems_hybrid_client.py
+
+That client is the SINGLE SOURCE OF TRUTH for:
+- All InfoTems API endpoints and methods
+- Field names and data structures  
+- Authentication and connection handling
+- CRUD operations (create, read, update, delete)
+
+NO direct API calls to InfoTems are permitted elsewhere in this project.
+All InfoTems operations MUST go through the InfotemsHybridClient class.
+
+Available methods include:
+- Contact: get_contact, search_contacts, create_contact, update_contact
+- Biographic: get_contact_biography, create_contact_biographic, update_contact_biographic
+- Notes: create_note, search_notes
+- Search: search_by_anumber, global_search
+
+See infotems_hybrid_client.py for complete method documentation.
 """
 
 import os

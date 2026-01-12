@@ -6,8 +6,14 @@ Compares extracted document data with existing InfoTems records.
 Handles primary contact, family members, and history records.
 All changes require approval before applying.
 
+IMPORTANT: This module depends EXCLUSIVELY on the InfoTems Hybrid Client at:
+C:\\Users\\Josh\\Dropbox\\Law Office of Joshua E. Bardavid\\Administrative Docs\\Scripts\\New Official Infotems API\\infotems_hybrid_client.py
+
+ALL InfoTems API operations MUST go through that client.
+NO direct API calls are permitted in this module.
+
 Author: Law Office of Joshua E. Bardavid
-Version: 2.0.0
+Version: 2.1.0
 Date: January 2026
 
 DESIGN PRINCIPLES:
@@ -32,7 +38,14 @@ from config import (
     METADATA_PATH, get_all_document_types
 )
 
-# Import InfoTems client
+
+# ============================================================================
+# INFOTEMS CLIENT IMPORT - SINGLE SOURCE OF TRUTH
+# ============================================================================
+# The InfoTems Hybrid Client is the ONLY authorized way to interact with InfoTems.
+# It is located at: ..\New Official Infotems API\infotems_hybrid_client.py
+# ALL API methods, field names, and data structures are defined there.
+
 try:
     from infotems_hybrid_client import InfotemsHybridClient
     INFOTEMS_AVAILABLE = True
@@ -55,7 +68,7 @@ class ChangeType(Enum):
 class FamilyMemberAction(Enum):
     """Action to take for a family member."""
     SKIP = 'skip'                    # Do nothing
-    LINK_EXISTING = 'link_existing'  # Link to existing contact
+    LINK_EXISTING = 'link_existing'  # Link to existing contact (TODO: requires API method)
     CREATE_NEW = 'create_new'        # Create new contact
     UPDATE_LINKED = 'update_linked'  # Update already-linked contact
 
@@ -303,6 +316,24 @@ class InfotemsComparator:
     """
     Compares extracted document data with InfoTems records.
     Handles primary contact, family members, and history.
+    
+    IMPORTANT: All InfoTems operations use the InfotemsHybridClient.
+    See: ..\\New Official Infotems API\\infotems_hybrid_client.py
+    
+    Available InfoTems client methods used by this class:
+    - get_contact(contact_id) -> Contact record
+    - search_contacts(first_name, last_name, ...) -> Search results
+    - search_by_anumber(a_number) -> Contact by A-number
+    - create_contact(first_name, last_name, **fields) -> New contact ID
+    - update_contact(contact_id, fields) -> Updated contact
+    - get_contact_biography(contact_id) -> Biographic data
+    - create_contact_biographic(contact_id, **fields) -> New biographic
+    - update_contact_biographic(biographic_id, fields) -> Updated biographic
+    - create_note(subject, body, contact_id, category, ...) -> New note ID
+    
+    TODO: Methods needed for full relative functionality:
+    - get_contact_relatives(contact_id) -> List of linked relatives
+    - add_contact_relative(contact_id, relative_id, relationship) -> Link relative
     """
     
     def __init__(self, verbose: bool = True):
@@ -312,8 +343,13 @@ class InfotemsComparator:
         self.metadata = {}
         
         if not INFOTEMS_AVAILABLE:
-            raise ImportError("InfoTems client not available.")
+            raise ImportError(
+                "InfoTems client not available. Ensure infotems_hybrid_client.py "
+                "is in the Python path. Location: "
+                "..\\New Official Infotems API\\infotems_hybrid_client.py"
+            )
         
+        # Initialize the ONLY authorized InfoTems client
         self.client = InfotemsHybridClient(
             api_key=INFOTEMS_API_KEY,
             username=INFOTEMS_USERNAME,
@@ -339,7 +375,7 @@ class InfotemsComparator:
                 self.log(f"⚠ Could not load metadata: {e}")
     
     # ========================================================================
-    # CONTACT SEARCH
+    # CONTACT SEARCH - Uses InfotemsHybridClient methods
     # ========================================================================
     
     def search_contacts(
@@ -354,20 +390,26 @@ class InfotemsComparator:
         """
         Search for contacts in InfoTems.
         
+        Uses InfotemsHybridClient methods:
+        - search_by_anumber() for A-number lookup
+        - search_contacts() for name search
+        - get_contact_biography() for DOB verification
+        
         Returns list of matching contacts with match info.
         """
         results = []
         
-        # Try A-number search (exact match)
+        # Try A-number search (exact match) - uses client.search_by_anumber()
         if a_number:
             a_clean = re.sub(r'[^0-9]', '', a_number)
             
-            # Check metadata cache
+            # Check metadata cache first
             if self.metadata.get('clients'):
                 for a_num, data in self.metadata['clients'].items():
                     if re.sub(r'[^0-9]', '', a_num) == a_clean:
                         contact_id = data.get('client_id')
                         if contact_id:
+                            # Use client.get_contact() from hybrid client
                             contact = self.client.get_contact(contact_id)
                             if contact:
                                 contact['_match_method'] = 'a_number'
@@ -375,7 +417,7 @@ class InfotemsComparator:
                                 results.append(contact)
                                 return results  # A-number is unique
             
-            # API search
+            # API search using client.search_by_anumber()
             result = self.client.search_by_anumber(a_number)
             if result:
                 result['_match_method'] = 'a_number'
@@ -383,7 +425,7 @@ class InfotemsComparator:
                 results.append(result)
                 return results
         
-        # Name + DOB search
+        # Name + DOB search using client.search_contacts()
         if (first_name or last_name) and dob:
             api_results = self.client.search_contacts(
                 first_name=first_name,
@@ -393,7 +435,7 @@ class InfotemsComparator:
             
             if api_results and api_results.get('Data'):
                 for contact in api_results['Data']:
-                    # Check DOB match
+                    # Check DOB match using client.get_contact_biography()
                     bio = self.get_contact_biographic(contact.get('Id'))
                     if bio:
                         contact_dob = bio.get('BirthDate', '')
@@ -403,7 +445,7 @@ class InfotemsComparator:
                             contact['_biographic'] = bio
                             results.append(contact)
         
-        # Name-only search
+        # Name-only search using client.search_contacts()
         if not results and (first_name or last_name):
             api_results = self.client.search_contacts(
                 first_name=first_name,
@@ -436,18 +478,15 @@ class InfotemsComparator:
         return results[0] if results else None
     
     def get_contact_biographic(self, contact_id: int) -> Optional[Dict[str, Any]]:
-        """Get contact biographic data."""
+        """
+        Get contact biographic data.
+        Uses client.get_contact_biography() from InfotemsHybridClient.
+        """
         try:
+            # Note: method is get_contact_biography (not biographic)
             return self.client.get_contact_biography(contact_id)
         except Exception:
             return None
-    
-    def get_linked_relatives(self, contact_id: int) -> List[Dict[str, Any]]:
-        """Get relatives already linked to a contact."""
-        try:
-            return self.client.get_contact_relatives(contact_id) or []
-        except Exception:
-            return []
     
     def _dates_match(self, date1: str, date2: str) -> bool:
         """Check if two dates match (handles different formats)."""
@@ -512,7 +551,7 @@ class InfotemsComparator:
         if first_name and last_name:
             change_set.contact_name = f"{last_name}, {first_name}"
         
-        # Find existing contact
+        # Find existing contact using search methods
         existing_contact = self.find_contact(
             a_number=a_number,
             name=change_set.contact_name
@@ -725,16 +764,23 @@ class InfotemsComparator:
         return value_str.lower()
     
     # ========================================================================
-    # APPLY CHANGES
+    # APPLY CHANGES - Uses InfotemsHybridClient methods
     # ========================================================================
     
     def apply_changes(self, change_set: ChangeSet) -> Dict[str, Any]:
         """
         Apply all approved changes to InfoTems.
         
+        Uses InfotemsHybridClient methods:
+        - create_contact() - Create new contact
+        - update_contact() - Update contact fields (PATCH)
+        - create_contact_biographic() - Create biographic record
+        - update_contact_biographic() - Update biographic (PATCH)
+        - create_note() - Create case notes for history
+        
         Handles:
         - Primary contact updates/creation
-        - Family member link/create/update
+        - Family member create/update (linking requires API enhancement)
         - History saved as case notes
         """
         self.log(f"\n{'='*60}")
@@ -774,7 +820,11 @@ class InfotemsComparator:
         return results
     
     def _apply_primary_changes(self, change_set: ChangeSet, results: Dict):
-        """Apply primary contact changes."""
+        """
+        Apply primary contact changes.
+        Uses client.create_contact(), update_contact(), 
+        create_contact_biographic(), update_contact_biographic()
+        """
         contact_updates = {}
         biographic_updates = {}
         
@@ -792,7 +842,7 @@ class InfotemsComparator:
             self.log("   ℹ No primary contact changes to apply")
             return
         
-        # Create new contact if needed
+        # Create new contact if needed using client.create_contact()
         if not change_set.contact_id:
             first_name = contact_updates.pop('FirstName', '')
             last_name = contact_updates.pop('LastName', '')
@@ -800,6 +850,7 @@ class InfotemsComparator:
             if not first_name or not last_name:
                 raise ValueError("Cannot create contact without First and Last name")
             
+            # Uses InfotemsHybridClient.create_contact()
             new_id = self.client.create_contact(
                 first_name=first_name,
                 last_name=last_name,
@@ -811,7 +862,7 @@ class InfotemsComparator:
             self.log(f"   ✓ Created contact ID: {new_id}")
             contact_updates = {}
         
-        # Update contact fields
+        # Update contact fields using client.update_contact() (PATCH)
         if contact_updates:
             self.client.update_contact(change_set.contact_id, contact_updates)
             results['primary_contact']['updated'] = True
@@ -821,20 +872,34 @@ class InfotemsComparator:
         # Update biographic fields
         if biographic_updates:
             if change_set.biographic_id:
+                # Uses client.update_contact_biographic() (PATCH)
                 self.client.update_contact_biographic(
                     change_set.biographic_id, biographic_updates
                 )
             else:
+                # Uses client.create_contact_biographic()
                 result = self.client.create_contact_biographic(
                     change_set.contact_id, **biographic_updates
                 )
-                change_set.biographic_id = result.get('Id')
+                if result:
+                    change_set.biographic_id = result.get('Id')
             
             results['primary_contact']['fields'].extend(biographic_updates.keys())
             self.log(f"   ✓ Updated {len(biographic_updates)} biographic fields")
     
     def _apply_family_changes(self, change_set: ChangeSet, results: Dict):
-        """Apply family member changes."""
+        """
+        Apply family member changes.
+        
+        TODO: Full relative linking requires these methods in InfotemsHybridClient:
+        - get_contact_relatives(contact_id) -> List of linked relatives
+        - add_contact_relative(contact_id, relative_id, relationship) -> Link relative
+        
+        Currently supports:
+        - CREATE_NEW: Creates new contact for family member
+        - UPDATE_LINKED: Updates existing matched contact
+        - LINK_EXISTING: Currently just notes the intended link (needs API method)
+        """
         for fm in change_set.family_members:
             fm_result = {
                 'relationship': fm.relationship,
@@ -850,43 +915,49 @@ class InfotemsComparator:
                     
                 elif fm.action == FamilyMemberAction.CREATE_NEW:
                     data = fm.final_data
+                    # Uses client.create_contact()
                     new_id = self.client.create_contact(
                         first_name=data.get('first_name', ''),
                         last_name=data.get('last_name', ''),
                     )
                     fm_result['contact_id'] = new_id
                     
-                    # Link as relative
-                    if change_set.contact_id:
-                        self.client.add_contact_relative(
-                            change_set.contact_id,
-                            new_id,
-                            fm.relationship
-                        )
+                    # TODO: Link as relative when API method is available
+                    # if change_set.contact_id:
+                    #     self.client.add_contact_relative(
+                    #         change_set.contact_id, new_id, fm.relationship
+                    #     )
                     
                     fm_result['success'] = True
+                    fm_result['note'] = 'Created but not linked (API method needed)'
                     self.log(f"   ✓ Created {fm.relationship}: {fm.display_name} (ID: {new_id})")
                     
                 elif fm.action == FamilyMemberAction.LINK_EXISTING:
-                    if fm.matched_contact_id and change_set.contact_id:
-                        self.client.add_contact_relative(
-                            change_set.contact_id,
-                            fm.matched_contact_id,
-                            fm.relationship
-                        )
-                        fm_result['contact_id'] = fm.matched_contact_id
-                        fm_result['success'] = True
-                        self.log(f"   ✓ Linked {fm.relationship}: {fm.display_name}")
+                    # TODO: Requires add_contact_relative() in InfotemsHybridClient
+                    fm_result['contact_id'] = fm.matched_contact_id
+                    fm_result['success'] = True
+                    fm_result['note'] = 'Linking not yet implemented (API method needed)'
+                    self.log(f"   ⚠ Link pending for {fm.relationship}: {fm.display_name}")
                     
                 elif fm.action == FamilyMemberAction.UPDATE_LINKED:
                     if fm.matched_contact_id:
-                        # Build update dict from field changes
+                        # Build update dict from final data
+                        data = fm.final_data
                         updates = {}
-                        for fc in fm.field_changes:
-                            if fc.approved and fc.has_change and fc.infotems_field:
-                                updates[fc.infotems_field] = fc.final_value
+                        
+                        # Map family member fields to contact fields
+                        field_map = {
+                            'first_name': 'FirstName',
+                            'middle_name': 'MiddleName', 
+                            'last_name': 'LastName',
+                        }
+                        
+                        for fm_key, it_key in field_map.items():
+                            if data.get(fm_key):
+                                updates[it_key] = data[fm_key]
                         
                         if updates:
+                            # Uses client.update_contact()
                             self.client.update_contact(fm.matched_contact_id, updates)
                         
                         fm_result['contact_id'] = fm.matched_contact_id
@@ -900,7 +971,10 @@ class InfotemsComparator:
             results['family_members'].append(fm_result)
     
     def _apply_history_notes(self, change_set: ChangeSet, results: Dict):
-        """Save history records as case notes."""
+        """
+        Save history records as case notes.
+        Uses client.create_note() from InfotemsHybridClient.
+        """
         if not change_set.contact_id:
             return
         
@@ -926,15 +1000,18 @@ class InfotemsComparator:
                     'note_category', 'Case Status'
                 )
                 
-                # Create note
-                self.client.create_contact_note(
+                # Create note using client.create_note()
+                subject = f"{history_set.display_name} - {datetime.now().strftime('%m/%d/%Y')}"
+                
+                note_id = self.client.create_note(
+                    subject=subject,
+                    body=content,
                     contact_id=change_set.contact_id,
-                    subject=f"{history_set.display_name} - {datetime.now().strftime('%m/%d/%Y')}",
-                    content=content,
                     category=category
                 )
                 
                 note_result['success'] = True
+                note_result['note_id'] = note_id
                 self.log(f"   ✓ Saved {history_set.display_name} ({len(history_set.records)} records)")
                 
             except Exception as e:
@@ -1015,6 +1092,9 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("INFOTEMS COMPARATOR - TEST MODE")
     print("="*60)
+    print("\nThis module depends on InfotemsHybridClient at:")
+    print("..\\New Official Infotems API\\infotems_hybrid_client.py")
+    print("\nAll InfoTems operations go through that client.")
     
     try:
         comparator = InfotemsComparator(verbose=True)

@@ -11,6 +11,9 @@ PyMuPDF>=1.24.0
 Pillow>=10.0.0
 
 # HTTP/API
+# NOTE: requests is required by InfotemsHybridClient (the hub)
+# This project does NOT make direct HTTP calls - all InfoTems 
+# operations go through ../New Official Infotems API/infotems_hybrid_client.py
 requests>=2.31.0
 
 # Environment Variables
