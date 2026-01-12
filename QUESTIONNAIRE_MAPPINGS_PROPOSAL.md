@@ -1,21 +1,38 @@
-# Questionnaire Field Mappings Proposal
+# Questionnaire Field Mappings - Revised Design
 ## AI Document Analyzer - Bardavid Law
 
 **Date:** January 12, 2026  
-**Purpose:** Define hardcoded field mappings for standard questionnaires to InfoTems
+**Version:** 2.0 (Revised)
+**Purpose:** Define comprehensive field mappings including family members and history records
 
 ---
 
-## Overview
+## Design Principles
 
-This document proposes field mappings from the firm's standard questionnaires to InfoTems Contact and ContactBiographic records. These mappings can be hardcoded since the questionnaires are standardized forms used repeatedly.
+1. **Everything requires approval** - No automatic updates; all changes reviewed and editable
+2. **Family members are full contacts** - Spouse, children, parents can be searched, linked, or created
+3. **History is structured data** - Address, employment, education stored as reviewable records
+4. **Approval window is fully editable** - User can modify any field, contact, or relationship before applying
 
-**Important Notes:**
-- User approval is still required before any updates (handwriting may be misread, data may be incorrect)
-- These mappings are for the **primary client** only (spouse, children, parents are informational)
-- Fields marked with `[BIOGRAPHIC]` go to ContactBiographic record
-- Fields marked with `[CONTACT]` go to Contact record
-- Fields marked with `[INFO ONLY]` are extracted but not mapped to InfoTems (for reference/case notes)
+---
+
+## Data Model
+
+### Primary Contact Data
+Fields that update the main client's Contact and ContactBiographic records.
+
+### Family Member Data
+Each family member (spouse, children, parents) is treated as a potential separate contact:
+- **Search existing contacts** by name, A-number, DOB
+- **Link to existing contact** if found
+- **Create new contact** if not found
+- **Update existing linked contact** with new data
+
+### History Data
+Structured records that can be:
+- Stored as case notes with formatted tables
+- Exported for form preparation
+- Reviewed and edited in approval window
 
 ---
 
@@ -60,485 +77,340 @@ This document proposes field mappings from the firm's standard questionnaires to
 
 ---
 
-## Questionnaire Mappings
+## Family Member Structure
 
-### 1. Consult Questionnaire (`consult_questionnaire`)
-**Purpose:** Initial consultation intake  
-**Languages:** English, Spanish, Creole
+Each family member extracted from questionnaire:
 
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| Last (family) name | `LastName` | CONTACT |
-| First (given) name | `FirstName` | CONTACT |
-| Middle name | `MiddleName` | CONTACT |
-| Date of birth | `BirthDate` | BIOGRAPHIC |
-| Country of birth | `BirthCountry` | BIOGRAPHIC |
-| Street Address | `AddressLine1` | CONTACT |
-| City | `City` | CONTACT |
-| State | `State` | CONTACT |
-| Zip | `PostalZipCode` | CONTACT |
-| Phone number(s) | `CellPhone` | CONTACT |
-| Email address | `EmailPersonal` | CONTACT |
-| Alien number | `AlienNumber` | BIOGRAPHIC |
-| Current immigration status | `CurrentImmigrationStatus` | BIOGRAPHIC |
-| Date of entry into US | `DateOfEntryToUsa` | BIOGRAPHIC |
-| Primary/Best language | `NativeLanguage` | BIOGRAPHIC |
-| Manner of entry | - | INFO ONLY |
-| Prior entries/removals | - | INFO ONLY |
-| Harm/fear in country | - | INFO ONLY |
-| Criminal history | - | INFO ONLY |
-| Removal proceedings info | - | INFO ONLY |
-
----
-
-### 2. 589 Questionnaire - Asylum (`asylum_questionnaire`)
-**Purpose:** I-589 Asylum Application  
-**Languages:** English, Spanish, French, Chinese, Russian, Haitian Creole
-
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| A-Number | `AlienNumber` | BIOGRAPHIC |
-| U.S. Social Security Number | `SSN` | BIOGRAPHIC |
-| Last (Family) Name | `LastName` | CONTACT |
-| First (Given) Name | `FirstName` | CONTACT |
-| Middle Name | `MiddleName` | CONTACT |
-| Street Number and Name | `AddressLine1` | CONTACT |
-| Apartment, Suite, Floor | `AddressLine2` | CONTACT |
-| City or Town | `City` | CONTACT |
-| State | `State` | CONTACT |
-| ZIP Code | `PostalZipCode` | CONTACT |
-| Gender | `Gender` | BIOGRAPHIC |
-| Date of Birth | `BirthDate` | BIOGRAPHIC |
-| City of Birth | `BirthCity` | BIOGRAPHIC |
-| State/Province of Birth | `BirthState` | BIOGRAPHIC |
-| Country of Birth | `BirthCountry` | BIOGRAPHIC |
-| Country of Citizenship | `Citizenship1Country` | BIOGRAPHIC |
-| Ethnicity | - | INFO ONLY |
-| Race | - | INFO ONLY |
-| Religion | - | INFO ONLY |
-| Height | - | INFO ONLY |
-| Weight | - | INFO ONLY |
-| Eye Color | - | INFO ONLY |
-| Hair Color | - | INFO ONLY |
-| Best/first language | `NativeLanguage` | BIOGRAPHIC |
-| Passport country | - | INFO ONLY |
-| Passport number | - | INFO ONLY |
-| Passport issue date | - | INFO ONLY |
-| Passport expiry date | - | INFO ONLY |
-| Immigration status at entry | `CurrentImmigrationStatus` | BIOGRAPHIC |
-| Date of Entry | `DateOfEntryToUsa` | BIOGRAPHIC |
-| Place/Port of Entry | - | INFO ONLY |
-| Relationship status | `MaritalStatus` | BIOGRAPHIC |
-| **Spouse Information** | - | INFO ONLY (separate contact) |
-| **Children Information** | - | INFO ONLY (separate contacts) |
-| **Parents Information** | - | INFO ONLY |
-| **Address History** | - | INFO ONLY |
-| **Employment History** | `Employer`, `Occupation` (current only) | CONTACT |
-| **Education History** | - | INFO ONLY |
-| **Criminal History** | - | INFO ONLY |
+```python
+{
+    'relationship': 'spouse' | 'child' | 'father' | 'mother' | 'sibling',
+    'extracted_data': {
+        'first_name': str,
+        'middle_name': str,
+        'last_name': str,
+        'date_of_birth': date,
+        'city_of_birth': str,
+        'state_of_birth': str,
+        'country_of_birth': str,
+        'citizenship': str,
+        'gender': str,
+        'a_number': str,
+        'ssn': str,
+        'current_address': str,
+        'immigration_status': str,
+        'date_of_entry': date,
+        # Relationship-specific fields
+        'date_of_marriage': date,  # spouse only
+        'include_in_application': bool,  # spouse/children
+    },
+    'matched_contact': {
+        'contact_id': int | None,
+        'match_confidence': float,
+        'match_method': 'a_number' | 'name_dob' | 'name_only' | None,
+    },
+    'action': 'link_existing' | 'create_new' | 'update_existing' | 'skip',
+    'fields_to_update': [...],  # if updating existing
+}
+```
 
 ---
 
-### 3. N-400 Questionnaire - Naturalization (`n400_questionnaire`)
-**Purpose:** Naturalization/Citizenship Application  
-**Languages:** English, Spanish
+## History Record Structure
 
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| Family Name (Last Name) | `LastName` | CONTACT |
-| Given Name (First Name) | `FirstName` | CONTACT |
-| Middle Name | `MiddleName` | CONTACT |
-| Other names used | - | INFO ONLY |
-| Gender | `Gender` | BIOGRAPHIC |
-| Date of Birth | `BirthDate` | BIOGRAPHIC |
-| Country of Birth | `BirthCountry` | BIOGRAPHIC |
-| Country of Citizenship | `Citizenship1Country` | BIOGRAPHIC |
-| Date became LPR | `DateOfEntryToUsa` | BIOGRAPHIC |
-| Marital Status | `MaritalStatus` | BIOGRAPHIC |
-| Number of marriages | - | INFO ONLY |
-| **Spouse Information** | - | INFO ONLY |
-| **Employment/School History** | `Employer`, `Occupation` (current) | CONTACT |
-| **Travel History** | - | INFO ONLY |
-| **Children Information** | - | INFO ONLY |
-| **Criminal/Arrest History** | - | INFO ONLY |
-| Tax questions | - | INFO ONLY |
-| Voting questions | - | INFO ONLY |
+### Address History
+```python
+{
+    'type': 'address',
+    'records': [
+        {
+            'address_line1': str,
+            'address_line2': str,
+            'city': str,
+            'state': str,
+            'zip_code': str,
+            'country': str,
+            'from_date': date,
+            'to_date': date | 'Present',
+            'is_current': bool,
+            'is_mailing': bool,
+            'is_foreign': bool,
+        },
+        ...
+    ]
+}
+```
 
----
+### Employment History
+```python
+{
+    'type': 'employment',
+    'records': [
+        {
+            'employer_name': str,
+            'occupation': str,
+            'address': str,
+            'city': str,
+            'state': str,
+            'zip_code': str,
+            'country': str,
+            'from_date': date,
+            'to_date': date | 'Present',
+            'is_current': bool,
+        },
+        ...
+    ]
+}
+```
 
-### 4. I-130 Questionnaire - Petitioner (`i130_petitioner_questionnaire`)
-**Purpose:** Family Petition (USC/LPR Petitioner)  
-**Languages:** English, Spanish
+### Education History
+```python
+{
+    'type': 'education',
+    'records': [
+        {
+            'school_name': str,
+            'school_type': 'Primary' | 'Middle' | 'High School' | 'University' | 'Trade School' | 'Advanced Degree',
+            'address': str,
+            'city': str,
+            'state': str,
+            'country': str,
+            'from_date': date,
+            'to_date': date,
+        },
+        ...
+    ]
+}
+```
 
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| Family name | `LastName` | CONTACT |
-| Given name | `FirstName` | CONTACT |
-| Middle name | `MiddleName` | CONTACT |
-| Maiden name | - | INFO ONLY |
-| Mobile/Cell Phone | `CellPhone` | CONTACT |
-| Home Phone | `HomePhone` | CONTACT |
-| Work Phone | `WorkPhone` | CONTACT |
-| Email Address | `EmailPersonal` | CONTACT |
-| Date of Birth | `BirthDate` | BIOGRAPHIC |
-| Place of Birth (City, State, Country) | `BirthCity`, `BirthState`, `BirthCountry` | BIOGRAPHIC |
-| Country of Citizenship | `Citizenship1Country` | BIOGRAPHIC |
-| Social Security Number | `SSN` | BIOGRAPHIC |
-| A-Number | `AlienNumber` | BIOGRAPHIC |
-| Ethnicity | - | INFO ONLY |
-| Race | - | INFO ONLY |
-| Height | - | INFO ONLY |
-| Weight | - | INFO ONLY |
-| Eye Color | - | INFO ONLY |
-| Hair Color | - | INFO ONLY |
-| Marital Status | `MaritalStatus` | BIOGRAPHIC |
-| Date of Marriage | - | INFO ONLY |
-| Place of Marriage | - | INFO ONLY |
-| Previous marriages | - | INFO ONLY |
-| **Father Information** | - | INFO ONLY |
-| **Mother Information** | - | INFO ONLY |
-| Naturalization info (if USC) | - | INFO ONLY |
-| LPR info (if LPR) | - | INFO ONLY |
-| Current employment | `Employer`, `Occupation` | CONTACT |
-| **Employment History** | - | INFO ONLY |
-| **Address History** | `AddressLine1`, `City`, `State`, `PostalZipCode` (current) | CONTACT |
-| Income information | - | INFO ONLY |
+### Travel History
+```python
+{
+    'type': 'travel',
+    'records': [
+        {
+            'departure_date': date,
+            'return_date': date,
+            'countries_visited': [str],
+            'duration_days': int,
+        },
+        ...
+    ]
+}
+```
 
----
-
-### 5. I-130A Questionnaire - Beneficiary (`i130_beneficiary_questionnaire`)
-**Purpose:** Family Petition (Foreign National Beneficiary)  
-**Languages:** English, Spanish
-
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| **Father Information** | - | INFO ONLY |
-| **Mother Information** | - | INFO ONLY |
-| Current Employer | `Employer` | CONTACT |
-| Occupation | `Occupation` | CONTACT |
-| **Employment History** | - | INFO ONLY |
-| Current Address | `AddressLine1`, `City`, `State`, `PostalZipCode` | CONTACT |
-| **Address History** | - | INFO ONLY |
-
-*Note: This is supplemental - main beneficiary info usually from DS-260 or Adjustment questionnaire*
-
----
-
-### 6. Adjustment Questionnaire - I-485 (`adjustment_questionnaire`)
-**Purpose:** Adjustment of Status to Permanent Resident  
-**Languages:** English, Spanish (bilingual form)
-
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| Name | `FirstName`, `MiddleName`, `LastName` | CONTACT |
-| Other names used | - | INFO ONLY |
-| Address | `AddressLine1`, `City`, `State`, `PostalZipCode` | CONTACT |
-| Phone | `CellPhone` | CONTACT |
-| Email | `EmailPersonal` | CONTACT |
-| Social Security Number | `SSN` | BIOGRAPHIC |
-| Height | - | INFO ONLY |
-| Weight | - | INFO ONLY |
-| Eye Color | - | INFO ONLY |
-| Hair Color | - | INFO ONLY |
-| Date of Birth | `BirthDate` | BIOGRAPHIC |
-| City of Birth | `BirthCity` | BIOGRAPHIC |
-| Country of Birth | `BirthCountry` | BIOGRAPHIC |
-| Passport Number | - | INFO ONLY |
-| Date entered US | `DateOfEntryToUsa` | BIOGRAPHIC |
-| Date left home country | - | INFO ONLY |
-| Countries transited | - | INFO ONLY |
-| Prior US entries | - | INFO ONLY |
-| Arrest history | - | INFO ONLY |
-| Marital status | `MaritalStatus` | BIOGRAPHIC |
-| **Spouse Information** | - | INFO ONLY |
-| **Children Information** | - | INFO ONLY |
-| **Parents Information** | - | INFO ONLY |
-| **Address History** | - | INFO ONLY |
-| **Employment History** | `Employer`, `Occupation` (current) | CONTACT |
+### Criminal/Arrest History
+```python
+{
+    'type': 'criminal',
+    'records': [
+        {
+            'date_of_arrest': date,
+            'place_of_arrest': str,
+            'charges': str,
+            'outcome': str,
+            'punishment': str,
+        },
+        ...
+    ]
+}
+```
 
 ---
 
-### 7. DS-260 Questionnaire (`ds260_questionnaire`)
-**Purpose:** Immigrant Visa Application (Consular Processing)  
-**Languages:** English, Spanish, Mandarin
+## Approval Window Design
 
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| Name Provided | `FirstName`, `MiddleName`, `LastName` | CONTACT |
-| Full Name in Native Language | - | INFO ONLY |
-| Other Names Used | - | INFO ONLY |
-| Sex | `Gender` | BIOGRAPHIC |
-| Current Marital Status | `MaritalStatus` | BIOGRAPHIC |
-| Date of Birth | `BirthDate` | BIOGRAPHIC |
-| City of Birth | `BirthCity` | BIOGRAPHIC |
-| State/Province of Birth | `BirthState` | BIOGRAPHIC |
-| Country of Birth | `BirthCountry` | BIOGRAPHIC |
-| Country of Nationality | `Citizenship1Country` | BIOGRAPHIC |
-| Passport Document ID | - | INFO ONLY |
-| Passport Issuing Country | - | INFO ONLY |
-| Passport Issue/Expiry Dates | - | INFO ONLY |
-| Other nationalities | `Citizenship2Country` | BIOGRAPHIC |
-| Present Address | `AddressLine1`, `City`, `State`, `PostalZipCode` | CONTACT |
-| **Address History** | - | INFO ONLY |
-| Primary Phone | `CellPhone` | CONTACT |
-| Secondary Phone | `HomePhone` | CONTACT |
-| Work Phone | `WorkPhone` | CONTACT |
-| Email Address | `EmailPersonal` | CONTACT |
-| Social Media | - | INFO ONLY |
-| **Father Information** | - | INFO ONLY |
-| **Mother Information** | - | INFO ONLY |
-| **Spouse Information** | - | INFO ONLY |
-| **Previous Spouses** | - | INFO ONLY |
-| **Children Information** | - | INFO ONLY |
-| A-Number (if any) | `AlienNumber` | BIOGRAPHIC |
-| **US Travel History** | - | INFO ONLY |
-| **Visa History** | - | INFO ONLY |
-| Primary Occupation | `Occupation` | CONTACT |
-| Current Employer/School | `Employer` | CONTACT |
-| **Countries Traveled** | - | INFO ONLY |
-| **Military Service** | - | INFO ONLY |
+### Tab Structure
 
----
+**Tab 1: Primary Contact**
+- Side-by-side comparison: Current InfoTems ↔ Extracted Data
+- Each field editable
+- Checkboxes to approve/reject individual changes
+- "Apply Selected Changes" button
 
-### 8. 601A Questionnaire (`waiver_601a_questionnaire`)
-**Purpose:** I-601A Unlawful Presence Waiver  
-**Languages:** English, Spanish
+**Tab 2: Family Members**
+For each family member (spouse, children, parents):
+- Extracted data display (editable)
+- Search panel: "Find in InfoTems" button
+  - Search by A-number (exact match)
+  - Search by Name + DOB (fuzzy match)
+  - Search by Name only (multiple results possible)
+- Match results list with selection
+- Actions:
+  - "Link to Selected Contact" - associates family member
+  - "Create New Contact" - creates contact with extracted data
+  - "Update Linked Contact" - updates existing linked contact
+  - "Skip" - don't process this family member
+- If linked/created, show field comparison for updates
 
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| A-Number | `AlienNumber` | BIOGRAPHIC |
-| U.S. Social Security Number | `SSN` | BIOGRAPHIC |
-| Last (Family) Name | `LastName` | CONTACT |
-| First (Given) Name | `FirstName` | CONTACT |
-| Middle Name | `MiddleName` | CONTACT |
-| Other names used | - | INFO ONLY |
-| Street Number and Name | `AddressLine1` | CONTACT |
-| Apartment, Suite, Floor | `AddressLine2` | CONTACT |
-| City or Town | `City` | CONTACT |
-| State | `State` | CONTACT |
-| ZIP Code | `PostalZipCode` | CONTACT |
-| Gender | `Gender` | BIOGRAPHIC |
-| Date of Birth | `BirthDate` | BIOGRAPHIC |
-| City of Birth | `BirthCity` | BIOGRAPHIC |
-| State/Province of Birth | `BirthState` | BIOGRAPHIC |
-| Country of Birth | `BirthCountry` | BIOGRAPHIC |
-| Country of Citizenship | `Citizenship1Country` | BIOGRAPHIC |
-| Ethnicity | - | INFO ONLY |
-| Race | - | INFO ONLY |
-| Height | - | INFO ONLY |
-| Weight | - | INFO ONLY |
-| Eye Color | - | INFO ONLY |
-| Hair Color | - | INFO ONLY |
-| Immigration status at entry | `CurrentImmigrationStatus` | BIOGRAPHIC |
-| Date of Entry | `DateOfEntryToUsa` | BIOGRAPHIC |
-| Port of Entry | - | INFO ONLY |
-| Prior entries | - | INFO ONLY |
-| Relationship status | `MaritalStatus` | BIOGRAPHIC |
-| **Spouse Information** | - | INFO ONLY |
-| **Children Information** | - | INFO ONLY |
-| **Parents Information** | - | INFO ONLY |
-| **Criminal History** | - | INFO ONLY |
-| Prior removal proceedings | - | INFO ONLY |
+**Tab 3: Address History**
+- Table view of all addresses extracted
+- Editable inline
+- Columns: Address, City, State, ZIP, Country, From, To, Current?, Mailing?
+- Add/Remove row buttons
+- "Save to Case Notes" button (formatted table)
+
+**Tab 4: Employment History**
+- Table view of all employment records
+- Editable inline
+- Columns: Employer, Title, Address, City, State, Country, From, To, Current?
+- Current employment auto-populates primary contact fields
+- Add/Remove row buttons
+- "Save to Case Notes" button
+
+**Tab 5: Education History**
+- Table view of all education records
+- Editable inline
+- Columns: School, Type, City, State, Country, From, To
+- Add/Remove row buttons
+- "Save to Case Notes" button
+
+**Tab 6: Other Information**
+- Travel history (if applicable)
+- Criminal history (if applicable)
+- Prior immigration applications
+- Free-text notes/comments
+- All editable
+- "Save to Case Notes" button
+
+### Bottom Action Bar
+- "Apply All Approved Changes" - executes all approved updates
+- "Save Draft" - saves current state without applying
+- "Cancel" - discard all changes
+- Progress indicator showing what will be updated
 
 ---
 
-### 9. I-131F Questionnaire (`parole_in_place_questionnaire`)
-**Purpose:** Parole in Place Application  
-**Languages:** English, Spanish, Creole
+## Workflow
 
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| A-Number | `AlienNumber` | BIOGRAPHIC |
-| U.S. Social Security Number | `SSN` | BIOGRAPHIC |
-| USCIS Online Account Number | - | INFO ONLY |
-| Last (Family) Name | `LastName` | CONTACT |
-| First (Given) Name | `FirstName` | CONTACT |
-| Middle Name | `MiddleName` | CONTACT |
-| Other names used | - | INFO ONLY |
-| Street Number and Name | `AddressLine1` | CONTACT |
-| Apartment, Suite, Floor | `AddressLine2` | CONTACT |
-| City or Town | `City` | CONTACT |
-| State | `State` | CONTACT |
-| ZIP Code | `PostalZipCode` | CONTACT |
-| Email address | `EmailPersonal` | CONTACT |
-| Gender | `Gender` | BIOGRAPHIC |
-| Date of Birth | `BirthDate` | BIOGRAPHIC |
-| City of Birth | `BirthCity` | BIOGRAPHIC |
-| State/Province of Birth | `BirthState` | BIOGRAPHIC |
-| Country of Birth | `BirthCountry` | BIOGRAPHIC |
-| Country of Citizenship | `Citizenship1Country` | BIOGRAPHIC |
-| Ethnicity | - | INFO ONLY |
-| Race | - | INFO ONLY |
-| Height | - | INFO ONLY |
-| Weight | - | INFO ONLY |
-| Eye Color | - | INFO ONLY |
-| Hair Color | - | INFO ONLY |
-| **Spouse Information** (incl. SSN) | - | INFO ONLY |
-| Date of Marriage | - | INFO ONLY |
-| **Children Information** (incl. SSN) | - | INFO ONLY |
-| Immigration status at entry | `CurrentImmigrationStatus` | BIOGRAPHIC |
-| Date of Entry | `DateOfEntryToUsa` | BIOGRAPHIC |
-| Port of Entry | - | INFO ONLY |
-| Prior entries | - | INFO ONLY |
-| Prior removal proceedings | - | INFO ONLY |
-| **Criminal History** | - | INFO ONLY |
+### Step 1: Document Upload & Extraction
+1. User uploads document (PDF, image)
+2. AI identifies document type (questionnaire or other)
+3. AI extracts all data with confidence scores
+4. System detects questionnaire type if applicable
 
----
+### Step 2: Primary Contact Matching
+1. Extract A-number or name from document
+2. Search InfoTems for matching contact
+3. If multiple matches, present selection dialog
+4. If no match, offer to create new contact
+5. Load current contact data for comparison
 
-### 10. I-90 Questionnaire (`green_card_renewal_questionnaire`)
-**Purpose:** Green Card Renewal/Replacement  
-**Languages:** English, Spanish
+### Step 3: Family Member Processing
+For each family member found:
+1. Display extracted data
+2. Auto-search for existing contacts (by A-number first, then name+DOB)
+3. Present matches with confidence scores
+4. User selects action: Link, Create, Update, or Skip
+5. If linking/updating, show field-level comparison
 
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| A-Number | `AlienNumber` | BIOGRAPHIC |
-| U.S. Social Security Number | `SSN` | BIOGRAPHIC |
-| USCIS Online Account Number | - | INFO ONLY |
-| Email Address | `EmailPersonal` | CONTACT |
-| Current Card Issue Date | - | INFO ONLY |
-| Current Card Expiry Date | - | INFO ONLY |
-| Family Name (Last Name) | `LastName` | CONTACT |
-| Given Name (First Name) | `FirstName` | CONTACT |
-| Middle Name | `MiddleName` | CONTACT |
-| Prior names | - | INFO ONLY |
-| Street Number and Name | `AddressLine1` | CONTACT |
-| Apt/Ste/Flr | `AddressLine2` | CONTACT |
-| City or Town | `City` | CONTACT |
-| State | `State` | CONTACT |
-| ZIP Code | `PostalZipCode` | CONTACT |
-| Country | - | INFO ONLY |
-| Gender | `Gender` | BIOGRAPHIC |
-| Date of Birth | `BirthDate` | BIOGRAPHIC |
-| City/Town/Village of Birth | `BirthCity` | BIOGRAPHIC |
-| Country of Birth | `BirthCountry` | BIOGRAPHIC |
-| Ethnicity | - | INFO ONLY |
-| Race | - | INFO ONLY |
-| Height | - | INFO ONLY |
-| Weight | - | INFO ONLY |
-| Eye Color | - | INFO ONLY |
-| Hair Color | - | INFO ONLY |
-| Mother's Name | - | INFO ONLY |
-| Father's Name | - | INFO ONLY |
-| Place of First Entry | - | INFO ONLY |
-| How obtained residency | - | INFO ONLY |
-| Where became resident | - | INFO ONLY |
-| Class of admission | - | INFO ONLY |
-| Prior removal proceedings | - | INFO ONLY |
-| Travel history | - | INFO ONLY |
-| **Criminal History** | - | INFO ONLY |
+### Step 4: History Data Processing
+1. Parse all history sections (address, employment, education, etc.)
+2. Organize into structured records
+3. Identify current vs. historical entries
+4. Flag inconsistencies or gaps
+
+### Step 5: Approval Window
+1. Present all data in tabbed interface
+2. User reviews and edits all fields
+3. User approves/rejects individual changes
+4. User confirms family member actions
+5. User reviews history data
+
+### Step 6: Apply Changes
+Only after explicit approval:
+1. Update primary contact (Contact + ContactBiographic)
+2. Process family members (create/link/update as approved)
+3. Save history data to case notes (formatted)
+4. Log all changes made
 
 ---
 
-### 11. FOIA Questionnaire (`foia_questionnaire`)
-**Purpose:** Freedom of Information Act Request  
-**Languages:** English, Spanish, Creole
+## Note Format for History Data
 
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| Last (family) name | `LastName` | CONTACT |
-| First (given) name | `FirstName` | CONTACT |
-| Middle name | `MiddleName` | CONTACT |
-| Date of birth | `BirthDate` | BIOGRAPHIC |
-| Country of birth | `BirthCountry` | BIOGRAPHIC |
-| Street Address | `AddressLine1` | CONTACT |
-| City | `City` | CONTACT |
-| State | `State` | CONTACT |
-| Zip | `PostalZipCode` | CONTACT |
-| Phone number(s) | `CellPhone` | CONTACT |
-| Email address | `EmailPersonal` | CONTACT |
-| Alien number | `AlienNumber` | BIOGRAPHIC |
-| Father's Full Name | - | INFO ONLY |
-| Mother's Full Name | - | INFO ONLY |
-| Current immigration status | `CurrentImmigrationStatus` | BIOGRAPHIC |
-| Date of entry into US | `DateOfEntryToUsa` | BIOGRAPHIC |
-| Manner of entry | - | INFO ONLY |
-| ICE/DHS encounters | - | INFO ONLY |
-| Prior entries/removals | - | INFO ONLY |
-| Removal proceedings info | - | INFO ONLY |
-| Criminal history | - | INFO ONLY |
-| Prior immigration applications | - | INFO ONLY |
-| Primary language | `NativeLanguage` | BIOGRAPHIC |
+When saving history to case notes, use structured format:
 
----
+```
+=== ADDRESS HISTORY ===
+Updated: 01/12/2026
 
-### 12. SIJ Questionnaire (`sij_questionnaire`)
-**Purpose:** Special Immigrant Juvenile Status  
-**Languages:** English, Spanish
+1. CURRENT ADDRESS
+   123 Main Street, Apt 4B
+   New York, NY 10001
+   From: 03/2023 to Present
 
-| Questionnaire Field | InfoTems Field | Type |
-|---------------------|----------------|------|
-| Full Name | `FirstName`, `MiddleName`, `LastName` | CONTACT |
-| Date of Birth | `BirthDate` | BIOGRAPHIC |
-| Current Address | `AddressLine1`, `City`, `State`, `PostalZipCode` | CONTACT |
-| Date started living there | - | INFO ONLY |
-| Father's name | - | INFO ONLY |
-| Father's birthplace | - | INFO ONLY |
-| Father's current location | - | INFO ONLY |
-| Mother's name | - | INFO ONLY |
-| Mother's birthplace | - | INFO ONLY |
-| Mother's current location | - | INFO ONLY |
-| **Address History (28 years)** | - | INFO ONLY |
+2. PREVIOUS ADDRESS
+   456 Oak Avenue
+   Brooklyn, NY 11201
+   From: 01/2020 to 03/2023
 
----
+3. PREVIOUS ADDRESS
+   789 Pine Road
+   Queens, NY 11375
+   From: 06/2018 to 01/2020
 
-## Implementation Notes
+=== EMPLOYMENT HISTORY ===
+Updated: 01/12/2026
 
-### Questionnaire Detection
-The AI should identify questionnaire type by:
-1. Looking for header text (e.g., "Questionnaire for Asylum", "N-400", "I-130")
-2. Checking for Bardavid Law letterhead/branding
-3. Analyzing field structure and section names
+1. CURRENT EMPLOYER
+   ABC Company
+   Manager
+   100 Business Blvd, New York, NY 10001
+   From: 06/2021 to Present
 
-### Multi-Language Support
-The same questionnaire may be in different languages. The AI should:
-1. Identify the language
-2. Use language-appropriate OCR settings
-3. Map fields based on structure (field order is consistent across translations)
+2. PREVIOUS EMPLOYER
+   XYZ Corp
+   Assistant Manager
+   200 Commerce St, Brooklyn, NY 11201
+   From: 03/2019 to 06/2021
 
-### Data Normalization
-Before comparison with InfoTems:
-- **A-Numbers:** Strip "A" prefix, format as 9 digits
-- **Dates:** Convert to YYYY-MM-DD format
-- **Phone numbers:** Strip formatting, normalize to 10 digits
-- **Names:** Proper case normalization
-- **Gender:** Map to "Male" or "Female"
-- **Marital Status:** Map to InfoTems values (Single, Married, Divorced, Widowed)
+=== EDUCATION HISTORY ===
+Updated: 01/12/2026
 
-### Confidence Scoring
-Different extraction confidence levels:
-- **High (0.9+):** Clearly printed/typed text in designated field
-- **Medium (0.7-0.9):** Handwritten but legible
-- **Low (<0.7):** Unclear handwriting, partial text
+1. Universidad Nacional (University)
+   San Salvador, El Salvador
+   From: 2010 to 2014
 
-### Family Members
-Spouse, children, and parents data should be:
-1. Extracted and displayed for review
-2. Available as separate "Create New Contact" action
-3. Not automatically merged into primary client record
-
-### Address/Employment History
-Historical data should be:
-1. Extracted for reference
-2. Available in a summary view
-3. NOT automatically merged (only current info updates InfoTems)
+2. Instituto Nacional (High School)
+   San Salvador, El Salvador
+   From: 2006 to 2010
+```
 
 ---
 
-## Approval Workflow
+## Implementation Priority
 
-1. **Document Upload** → AI identifies questionnaire type
-2. **Field Extraction** → AI extracts all fields with confidence scores
-3. **Client Lookup** → Match to existing InfoTems contact (A-number or name)
-4. **Comparison View** → Show current vs. proposed values
-5. **User Review** → Approve/reject individual field changes
-6. **Apply Changes** → Update InfoTems via PATCH API
+### Phase 1: Core Functionality
+- [ ] Primary contact extraction and comparison
+- [ ] Basic approval window with editable fields
+- [ ] Apply changes to Contact + ContactBiographic
+
+### Phase 2: Family Members
+- [ ] Family member extraction
+- [ ] Contact search functionality
+- [ ] Link/Create/Update workflow
+- [ ] Family member tab in approval window
+
+### Phase 3: History Data
+- [ ] Address history extraction and display
+- [ ] Employment history extraction and display
+- [ ] Education history extraction and display
+- [ ] History tabs in approval window
+- [ ] Save to case notes functionality
+
+### Phase 4: Advanced Features
+- [ ] Travel history
+- [ ] Criminal history
+- [ ] Prior applications tracking
+- [ ] Batch processing multiple documents
+- [ ] Export to form-filling tools
 
 ---
 
-## Next Steps
+## Questionnaire Field Definitions
 
-1. Review and confirm these mappings
-2. Add any missing fields from questionnaires
-3. Implement questionnaire-specific extraction templates
-4. Add questionnaire type detection logic
-5. Create family member handling workflow
+See `config.py` for complete field definitions for each questionnaire type.
+
+Key changes from v1:
+- Family member fields now have `family_member` attribute identifying relationship
+- History fields now have `history_type` attribute (address/employment/education/travel/criminal)
+- All fields remain editable in approval window regardless of mapping status

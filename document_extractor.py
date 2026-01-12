@@ -3,10 +3,10 @@ AI Document Analyzer - Document Extractor
 ==========================================
 
 Uses Claude AI to extract structured data from documents.
-Supports OCR for images and text extraction from PDFs.
+Handles questionnaires with family members and history sections.
 
 Author: Law Office of Joshua E. Bardavid
-Version: 1.0.0
+Version: 2.0.0
 Date: January 2026
 """
 
@@ -29,33 +29,25 @@ try:
 except ImportError:
     PYMUPDF_AVAILABLE = False
 
-try:
-    from PIL import Image
-    import io
-    PIL_AVAILABLE = True
-except ImportError:
-    PIL_AVAILABLE = False
-
-from config import DOCUMENT_TYPES, AI_CONFIG, ANTHROPIC_API_KEY
+from config import (
+    DOCUMENT_TYPES, QUESTIONNAIRE_TYPES, AI_CONFIG, ANTHROPIC_API_KEY,
+    FAMILY_RELATIONSHIPS, HISTORY_TYPES, get_all_document_types, detect_questionnaire_type
+)
 
 
 class DocumentExtractor:
     """
     AI-powered document data extractor using Claude Vision.
     
-    Supports:
-    - PDF documents (converted to images)
-    - Image files (PNG, JPG, etc.)
-    - Scanned documents
+    Extracts:
+    - Primary contact fields
+    - Family member information
+    - Address, employment, education history
+    - Other questionnaire-specific data
     """
     
     def __init__(self, verbose: bool = True):
-        """
-        Initialize the document extractor.
-        
-        Args:
-            verbose: Print status messages
-        """
+        """Initialize the document extractor."""
         self.verbose = verbose
         self.client = None
         
@@ -77,15 +69,7 @@ class DocumentExtractor:
     # ========================================================================
     
     def load_document(self, file_path: str) -> Tuple[List[str], str]:
-        """
-        Load a document and convert to base64 images.
-        
-        Args:
-            file_path: Path to document (PDF or image)
-            
-        Returns:
-            Tuple of (list of base64 images, media type)
-        """
+        """Load a document and convert to base64 images."""
         path = Path(file_path)
         
         if not path.exists():
@@ -112,15 +96,11 @@ class DocumentExtractor:
         
         for page_num in range(len(doc)):
             page = doc[page_num]
-            # Render at 2x resolution for better OCR
-            mat = fitz.Matrix(2, 2)
+            mat = fitz.Matrix(2, 2)  # 2x resolution
             pix = page.get_pixmap(matrix=mat)
-            
-            # Convert to PNG bytes
             png_bytes = pix.tobytes("png")
             b64 = base64.standard_b64encode(png_bytes).decode('utf-8')
             images.append(b64)
-            
             self.log(f"   Page {page_num + 1}/{len(doc)} converted")
         
         doc.close()
@@ -130,7 +110,6 @@ class DocumentExtractor:
         """Load single image file."""
         self.log(f"🖼️ Loading image: {path.name}")
         
-        suffix = path.suffix.lower()
         media_type_map = {
             '.png': 'image/png',
             '.jpg': 'image/jpeg',
@@ -139,7 +118,7 @@ class DocumentExtractor:
             '.webp': 'image/webp',
         }
         
-        media_type = media_type_map.get(suffix, 'image/png')
+        media_type = media_type_map.get(path.suffix.lower(), 'image/png')
         
         with open(path, 'rb') as f:
             b64 = base64.standard_b64encode(f.read()).decode('utf-8')
@@ -150,331 +129,34 @@ class DocumentExtractor:
     # DOCUMENT TYPE DETECTION
     # ========================================================================
     
-    def detect_document_type(self, images: List[str], media_type: str) -> str:
+    def detect_document_type(self, images: List[str], media_type: str) -> Tuple[str, Optional[str]]:
         """
-        Use AI to detect the type of document.
+        Detect document type and questionnaire subtype.
         
-        Args:
-            images: List of base64 encoded images
-            media_type: MIME type of images
-            
         Returns:
-            Document type key from DOCUMENT_TYPES
+            Tuple of (document_type, questionnaire_type or None)
         """
         self.log("🔍 Detecting document type...")
         
-        # Build document type descriptions
-        type_descriptions = []
-        for key, config in DOCUMENT_TYPES.items():
-            type_descriptions.append(f"- {key}: {config['display_name']} - {config['description']}")
+        # Build type descriptions
+        all_types = get_all_document_types()
+        type_list = []
+        for key, config in all_types.items():
+            type_list.append(f"- {key}: {config['display_name']}")
         
-        prompt = f"""Analyze this document and determine its type.
+        prompt = f"""Analyze this document and identify its type.
 
-Available document types:
-{chr(10).join(type_descriptions)}
+Known document types:
+{chr(10).join(type_list)}
 
-Respond with ONLY the document type key (e.g., "passport", "questionnaire", "ead_card").
-If the document doesn't match any type, respond with "unknown".
-"""
-        
-        # Build message with first page image
-        content = [
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": images[0]
-                }
-            },
-            {
-                "type": "text",
-                "text": prompt
-            }
-        ]
-        
-        response = self.client.messages.create(
-            model=AI_CONFIG['model'],
-            max_tokens=100,
-            temperature=0,
-            messages=[{"role": "user", "content": content}]
-        )
-        
-        doc_type = response.content[0].text.strip().lower()
-        
-        # Validate response
-        if doc_type in DOCUMENT_TYPES:
-            self.log(f"   ✓ Detected: {DOCUMENT_TYPES[doc_type]['display_name']}")
-            return doc_type
-        else:
-            self.log(f"   ⚠ Unknown document type: {doc_type}")
-            return "unknown"
-    
-    # ========================================================================
-    # DATA EXTRACTION
-    # ========================================================================
-    
-    def extract_data(self, file_path: str, document_type: str = None) -> Dict[str, Any]:
-        """
-        Extract structured data from a document.
-        
-        Args:
-            file_path: Path to document
-            document_type: Optional type override (auto-detects if not provided)
-            
-        Returns:
-            Dict with extracted data including:
-            - document_type: Detected or specified type
-            - confidence: Overall extraction confidence (0-1)
-            - fields: Dict of field_key -> {value, confidence, source_text}
-            - raw_text: Full OCR text
-            - errors: List of any extraction errors
-        """
-        self.log(f"\n{'='*60}")
-        self.log(f"📋 EXTRACTING DATA FROM: {Path(file_path).name}")
-        self.log(f"{'='*60}")
-        
-        # Load document
-        images, media_type = self.load_document(file_path)
-        
-        # Detect or validate document type
-        if document_type is None:
-            document_type = self.detect_document_type(images, media_type)
-        
-        if document_type == "unknown" or document_type not in DOCUMENT_TYPES:
-            return {
-                'document_type': 'unknown',
-                'confidence': 0,
-                'fields': {},
-                'raw_text': '',
-                'errors': ['Could not determine document type']
-            }
-        
-        doc_config = DOCUMENT_TYPES[document_type]
-        
-        # Extract data for this document type
-        extracted = self._extract_fields(images, media_type, document_type, doc_config)
-        
-        return extracted
-    
-    def _extract_fields(self, images: List[str], media_type: str, 
-                        document_type: str, doc_config: Dict) -> Dict[str, Any]:
-        """
-        Extract specific fields from document using AI.
-        
-        Args:
-            images: List of base64 images
-            media_type: Image MIME type
-            document_type: Document type key
-            doc_config: Document type configuration
-            
-        Returns:
-            Extraction results dictionary
-        """
-        self.log(f"\n📝 Extracting {doc_config['display_name']} fields...")
-        
-        # Build field extraction prompt
-        field_list = []
-        for field in doc_config['fields']:
-            field_list.append(f"- {field['key']}: {field['label']}")
-        
-        prompt = f"""You are an expert document analyzer. Extract the following information from this {doc_config['display_name']}.
+Respond in JSON format:
+{{"document_type": "type_key", "questionnaire_name": "specific questionnaire name if visible"}}
 
-FIELDS TO EXTRACT:
-{chr(10).join(field_list)}
-
-INSTRUCTIONS:
-1. Carefully examine the document image(s)
-2. Extract each field value exactly as shown in the document
-3. For dates, use YYYY-MM-DD format
-4. For phone numbers, include country code if visible
-5. For A-numbers, include the "A" prefix (e.g., A123456789)
-6. If a field is not visible or unclear, use null
-7. Include a confidence score (0.0-1.0) for each field
-
-RESPOND WITH VALID JSON ONLY in this exact format:
-{{
-    "fields": {{
-        "field_key": {{
-            "value": "extracted value or null",
-            "confidence": 0.95,
-            "source_text": "exact text from document"
-        }}
-    }},
-    "raw_text": "full OCR text from document",
-    "overall_confidence": 0.9,
-    "notes": "any relevant observations"
-}}
-
-Be precise and accurate. Immigration documents require exact information."""
-
-        # Build message with all images
-        content = []
-        for i, img in enumerate(images):
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": img
-                }
-            })
-        
-        content.append({
-            "type": "text",
-            "text": prompt
-        })
-        
-        try:
-            response = self.client.messages.create(
-                model=AI_CONFIG['model'],
-                max_tokens=AI_CONFIG['max_tokens'],
-                temperature=AI_CONFIG['temperature'],
-                messages=[{"role": "user", "content": content}]
-            )
-            
-            response_text = response.content[0].text
-            
-            # Parse JSON response
-            # Try to find JSON in response
-            json_match = re.search(r'\{[\s\S]*\}', response_text)
-            if json_match:
-                result = json.loads(json_match.group())
-            else:
-                raise ValueError("No JSON found in response")
-            
-            # Build result structure
-            extracted = {
-                'document_type': document_type,
-                'confidence': result.get('overall_confidence', 0.8),
-                'fields': result.get('fields', {}),
-                'raw_text': result.get('raw_text', ''),
-                'notes': result.get('notes', ''),
-                'errors': []
-            }
-            
-            # Log extracted fields
-            self.log(f"\n   Extracted {len(extracted['fields'])} fields:")
-            for key, data in extracted['fields'].items():
-                value = data.get('value', 'N/A')
-                conf = data.get('confidence', 0)
-                if value:
-                    self.log(f"   ✓ {key}: {value} (conf: {conf:.0%})")
-            
-            return extracted
-            
-        except json.JSONDecodeError as e:
-            self.log(f"   ⚠ JSON parse error: {e}")
-            return {
-                'document_type': document_type,
-                'confidence': 0,
-                'fields': {},
-                'raw_text': '',
-                'errors': [f"Failed to parse AI response: {e}"]
-            }
-        except Exception as e:
-            self.log(f"   ⚠ Extraction error: {e}")
-            return {
-                'document_type': document_type,
-                'confidence': 0,
-                'fields': {},
-                'raw_text': '',
-                'errors': [str(e)]
-            }
-    
-    # ========================================================================
-    # SPECIALIZED EXTRACTORS
-    # ========================================================================
-    
-    def extract_a_number(self, file_path: str) -> Optional[str]:
-        """
-        Quick extraction of just A-number from any document.
-        
-        Args:
-            file_path: Path to document
-            
-        Returns:
-            A-number string or None
-        """
-        self.log(f"🔍 Quick A-number extraction: {Path(file_path).name}")
-        
-        images, media_type = self.load_document(file_path)
-        
-        prompt = """Look for an Alien Registration Number (A-Number) in this document.
-A-Numbers are typically formatted as "A" followed by 9 digits (e.g., A123456789).
-
-If you find an A-Number, respond with ONLY the A-Number.
-If no A-Number is found, respond with "NOT_FOUND".
+If unknown, use: {{"document_type": "unknown", "questionnaire_name": null}}
 """
         
         content = [
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": images[0]
-                }
-            },
-            {"type": "text", "text": prompt}
-        ]
-        
-        response = self.client.messages.create(
-            model=AI_CONFIG['model'],
-            max_tokens=50,
-            temperature=0,
-            messages=[{"role": "user", "content": content}]
-        )
-        
-        result = response.content[0].text.strip()
-        
-        if result == "NOT_FOUND":
-            self.log("   ⚠ No A-Number found")
-            return None
-        
-        # Clean and validate A-number
-        a_num = re.sub(r'[^A0-9]', '', result.upper())
-        if re.match(r'^A?\d{9}$', a_num):
-            if not a_num.startswith('A'):
-                a_num = 'A' + a_num
-            self.log(f"   ✓ Found: {a_num}")
-            return a_num
-        
-        self.log(f"   ⚠ Invalid A-Number format: {result}")
-        return None
-    
-    def identify_client(self, file_path: str) -> Dict[str, Optional[str]]:
-        """
-        Quick identification of client from any document.
-        
-        Args:
-            file_path: Path to document
-            
-        Returns:
-            Dict with 'name' and 'a_number' keys
-        """
-        self.log(f"🔍 Identifying client: {Path(file_path).name}")
-        
-        images, media_type = self.load_document(file_path)
-        
-        prompt = """Identify the primary person in this document.
-
-Extract:
-1. Full name (LAST NAME, First Name Middle Name format)
-2. A-Number if visible (A + 9 digits)
-
-Respond with JSON ONLY:
-{"name": "LAST, First Middle", "a_number": "A123456789 or null"}"""
-        
-        content = [
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": images[0]
-                }
-            },
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": images[0]}},
             {"type": "text", "text": prompt}
         ]
         
@@ -485,54 +167,293 @@ Respond with JSON ONLY:
             messages=[{"role": "user", "content": content}]
         )
         
+        result_text = response.content[0].text.strip()
+        
         try:
-            result = json.loads(response.content[0].text)
-            self.log(f"   ✓ Name: {result.get('name', 'Unknown')}")
-            self.log(f"   ✓ A-Number: {result.get('a_number', 'Not found')}")
-            return result
+            # Extract JSON from response
+            json_match = re.search(r'\{[^}]+\}', result_text)
+            if json_match:
+                result = json.loads(json_match.group())
+                doc_type = result.get('document_type', 'unknown')
+                q_name = result.get('questionnaire_name')
+                
+                # Try to match questionnaire type from name
+                q_type = None
+                if q_name:
+                    q_type = detect_questionnaire_type(q_name)
+                
+                self.log(f"   Detected: {doc_type}" + (f" ({q_type})" if q_type else ""))
+                return doc_type, q_type
         except:
-            return {'name': None, 'a_number': None}
+            pass
+        
+        # Fallback: check if text matches any type
+        for key in all_types:
+            if key in result_text.lower():
+                self.log(f"   Detected: {key}")
+                return key, None
+        
+        self.log("   ⚠ Could not detect document type")
+        return 'unknown', None
+    
+    # ========================================================================
+    # MAIN EXTRACTION
+    # ========================================================================
+    
+    def extract_data(self, file_path: str, document_type: str = None) -> Dict[str, Any]:
+        """
+        Extract all data from document.
+        
+        Returns dict with:
+        - document_type: str
+        - questionnaire_type: str or None
+        - confidence: float
+        - fields: Dict of primary fields
+        - family_members: List of family member dicts
+        - history: Dict of history records by type
+        - other: Dict of other extracted info
+        """
+        self.log(f"\n{'='*60}")
+        self.log(f"📊 EXTRACTING DATA FROM: {Path(file_path).name}")
+        self.log(f"{'='*60}")
+        
+        # Load document
+        images, media_type = self.load_document(file_path)
+        
+        # Detect type if not specified
+        q_type = None
+        if not document_type:
+            document_type, q_type = self.detect_document_type(images, media_type)
+        
+        # Get configuration
+        all_types = get_all_document_types()
+        if document_type not in all_types:
+            self.log(f"   ⚠ Unknown document type: {document_type}")
+            return {
+                'document_type': document_type,
+                'questionnaire_type': q_type,
+                'confidence': 0.0,
+                'fields': {},
+                'family_members': [],
+                'history': {},
+                'other': {},
+                'error': f"Unknown document type: {document_type}"
+            }
+        
+        config = all_types[document_type]
+        is_questionnaire = document_type in QUESTIONNAIRE_TYPES
+        
+        # Build extraction prompt
+        prompt = self._build_extraction_prompt(config, is_questionnaire)
+        
+        # Send to AI with all pages
+        self.log(f"🤖 Sending {len(images)} page(s) to AI...")
+        
+        content = []
+        for i, img in enumerate(images):
+            content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": img}
+            })
+        content.append({"type": "text", "text": prompt})
+        
+        response = self.client.messages.create(
+            model=AI_CONFIG['model'],
+            max_tokens=AI_CONFIG['max_tokens'],
+            temperature=AI_CONFIG['temperature'],
+            messages=[{"role": "user", "content": content}]
+        )
+        
+        result_text = response.content[0].text.strip()
+        
+        # Parse response
+        extracted = self._parse_extraction_response(result_text, config, is_questionnaire)
+        extracted['document_type'] = document_type
+        extracted['questionnaire_type'] = q_type
+        
+        self._log_extraction_summary(extracted)
+        
+        return extracted
+    
+    def _build_extraction_prompt(self, config: Dict, is_questionnaire: bool) -> str:
+        """Build the extraction prompt based on document config."""
+        
+        # Get field definitions
+        if is_questionnaire:
+            field_defs = config.get('fields', {})
+            primary_fields = field_defs.get('primary', [])
+            family_defs = field_defs.get('family_members', [])
+            history_defs = field_defs.get('history', {})
+            other_defs = field_defs.get('other', [])
+        else:
+            primary_fields = config.get('fields', [])
+            family_defs = []
+            history_defs = {}
+            other_defs = []
+        
+        # Build field list for primary
+        primary_list = []
+        for f in primary_fields:
+            primary_list.append(f"- {f['key']}: {f['label']}")
+        
+        # Build family member section
+        family_section = ""
+        if family_defs:
+            family_parts = []
+            for fm_def in family_defs:
+                rel = fm_def['relationship']
+                fields = fm_def.get('fields', [])
+                family_parts.append(f"  - {rel}: Extract {', '.join(fields[:5])}...")
+            family_section = f"""
+FAMILY MEMBERS:
+Extract information for each family member found:
+{chr(10).join(family_parts)}
+"""
+        
+        # Build history section
+        history_section = ""
+        if history_defs:
+            history_parts = []
+            for h_type, h_config in history_defs.items():
+                label = h_config.get('section_label', h_type) if isinstance(h_config, dict) else h_type
+                history_parts.append(f"  - {h_type}: {label}")
+            history_section = f"""
+HISTORY RECORDS:
+Extract all historical records:
+{chr(10).join(history_parts)}
+"""
+        
+        prompt = f"""Extract all information from this {config['display_name']}.
+
+PRIMARY CONTACT FIELDS:
+{chr(10).join(primary_list)}
+{family_section}
+{history_section}
+
+IMPORTANT:
+- Extract exactly what is written, do not infer or assume
+- For handwritten text, indicate confidence (high/medium/low)
+- Dates should be in YYYY-MM-DD format when possible
+- A-Numbers should include all digits (9 digits)
+- If a field is empty or not visible, omit it
+
+Respond in JSON format:
+{{
+    "confidence": 0.0-1.0,
+    "fields": {{
+        "field_key": {{"value": "extracted value", "confidence": 0.0-1.0}},
+        ...
+    }},
+    "family_members": [
+        {{
+            "relationship": "spouse|child|father|mother|sibling",
+            "data": {{"first_name": "...", "last_name": "...", ...}},
+            "confidence": 0.0-1.0
+        }},
+        ...
+    ],
+    "history": {{
+        "address": [
+            {{"data": {{"address_line1": "...", "city": "...", ...}}, "is_current": true, "confidence": 0.9}},
+            ...
+        ],
+        "employment": [...],
+        "education": [...]
+    }},
+    "other": {{
+        "any_other_relevant_info": "..."
+    }}
+}}
+
+Extract ALL visible information, even if some sections are empty.
+"""
+        return prompt
+    
+    def _parse_extraction_response(self, response_text: str, config: Dict, is_questionnaire: bool) -> Dict[str, Any]:
+        """Parse the AI response into structured data."""
+        
+        result = {
+            'confidence': 0.0,
+            'fields': {},
+            'family_members': [],
+            'history': {},
+            'other': {}
+        }
+        
+        try:
+            # Find JSON in response
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+            
+            if json_start >= 0 and json_end > json_start:
+                json_text = response_text[json_start:json_end]
+                parsed = json.loads(json_text)
+                
+                result['confidence'] = parsed.get('confidence', 0.8)
+                result['fields'] = parsed.get('fields', {})
+                result['family_members'] = parsed.get('family_members', [])
+                result['history'] = parsed.get('history', {})
+                result['other'] = parsed.get('other', {})
+        
+        except json.JSONDecodeError as e:
+            self.log(f"   ⚠ JSON parse error: {e}")
+            # Try to extract key-value pairs manually
+            result['other']['raw_response'] = response_text
+        
+        return result
+    
+    def _log_extraction_summary(self, extracted: Dict):
+        """Log summary of extracted data."""
+        self.log(f"\n   📋 EXTRACTION SUMMARY:")
+        self.log(f"      Confidence: {extracted.get('confidence', 0):.0%}")
+        self.log(f"      Fields: {len(extracted.get('fields', {}))}")
+        self.log(f"      Family members: {len(extracted.get('family_members', []))}")
+        
+        history = extracted.get('history', {})
+        for h_type, records in history.items():
+            if records:
+                self.log(f"      {h_type}: {len(records)} records")
+    
+    # ========================================================================
+    # CONVENIENCE METHODS
+    # ========================================================================
+    
+    def extract_from_file(self, file_path: str) -> Dict[str, Any]:
+        """Convenience method - auto-detect type and extract."""
+        return self.extract_data(file_path)
+    
+    def extract_questionnaire(self, file_path: str, questionnaire_type: str) -> Dict[str, Any]:
+        """Extract from a known questionnaire type."""
+        if questionnaire_type not in QUESTIONNAIRE_TYPES:
+            raise ValueError(f"Unknown questionnaire type: {questionnaire_type}")
+        return self.extract_data(file_path, document_type=questionnaire_type)
 
 
 # ============================================================================
-# STANDALONE TEST
+# TEST
 # ============================================================================
 
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) < 2:
-        print("Usage: python document_extractor.py <document_path>")
-        print("\nSupported formats: PDF, PNG, JPG, GIF, WEBP")
-        sys.exit(1)
-    
-    doc_path = sys.argv[1]
+    print("\n" + "="*60)
+    print("DOCUMENT EXTRACTOR - TEST MODE")
+    print("="*60)
     
     try:
         extractor = DocumentExtractor(verbose=True)
         
-        print("\n" + "="*60)
-        print("AI DOCUMENT EXTRACTOR - TEST MODE")
-        print("="*60)
-        
-        # First, identify the client
-        print("\n--- CLIENT IDENTIFICATION ---")
-        client_info = extractor.identify_client(doc_path)
-        
-        # Then extract full data
-        print("\n--- FULL EXTRACTION ---")
-        result = extractor.extract_data(doc_path)
-        
-        print("\n" + "="*60)
-        print("EXTRACTION RESULTS")
-        print("="*60)
-        print(f"Document Type: {result['document_type']}")
-        print(f"Confidence: {result['confidence']:.0%}")
-        print(f"Errors: {result['errors']}")
-        print("\nExtracted Fields:")
-        for key, data in result['fields'].items():
-            print(f"  {key}: {data.get('value')} (conf: {data.get('confidence', 0):.0%})")
-        
+        # Test with a sample file if provided
+        import sys
+        if len(sys.argv) > 1:
+            file_path = sys.argv[1]
+            result = extractor.extract_from_file(file_path)
+            print("\n" + "="*60)
+            print("EXTRACTION RESULT:")
+            print("="*60)
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            print("\nUsage: python document_extractor.py <file_path>")
+            print("\nSupported formats: PDF, PNG, JPG, JPEG, GIF, WEBP")
+    
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
