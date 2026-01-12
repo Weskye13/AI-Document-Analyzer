@@ -358,19 +358,27 @@ class InfotemsComparator:
     See: ..\\New Official Infotems API\\infotems_hybrid_client.py
     
     Available InfoTems client methods used by this class:
+    
+    CONTACTS:
     - get_contact(contact_id) -> Contact record
     - search_contacts(first_name, last_name, ...) -> Search results
     - search_by_anumber(a_number) -> Contact by A-number
     - create_contact(first_name, last_name, **fields) -> New contact ID
     - update_contact(contact_id, fields) -> Updated contact
+    
+    BIOGRAPHIC:
     - get_contact_biography(contact_id) -> Biographic data
     - create_contact_biographic(contact_id, **fields) -> New biographic
     - update_contact_biographic(biographic_id, fields) -> Updated biographic
-    - create_note(subject, body, contact_id, category, ...) -> New note ID
     
-    TODO: Methods needed for full relative functionality:
-    - get_contact_relatives(contact_id) -> List of linked relatives
-    - add_contact_relative(contact_id, relative_id, relationship) -> Link relative
+    RELATIONSHIPS (Family Members):
+    - add_contact_relative(primary_id, related_id, relationship, **kwargs) -> Link relatives
+    - search_contact_relationships(primary_contact_id) -> Get linked relatives
+    - update_contact_relationship(relationship_id, fields) -> Update relationship
+    - delete_contact_relationship(relationship_id) -> Remove link
+    
+    NOTES:
+    - create_note(subject, body, contact_id, category, ...) -> New note ID
     """
     
     def __init__(self, verbose: bool = True):
@@ -928,21 +936,39 @@ class InfotemsComparator:
         """
         Apply family member changes.
         
-        TODO: Full relative linking requires these methods in InfotemsHybridClient:
-        - get_contact_relatives(contact_id) -> List of linked relatives
-        - add_contact_relative(contact_id, relative_id, relationship) -> Link relative
+        Uses InfotemsHybridClient methods:
+        - create_contact() - Create new contact for family member
+        - update_contact() - Update existing contact
+        - add_contact_relative() - Link contacts as relatives
+        - search_contact_relationships() - Check existing relationships
         
-        Currently supports:
-        - CREATE_NEW: Creates new contact for family member
+        Supports:
+        - CREATE_NEW: Creates new contact AND links as relative
         - UPDATE_LINKED: Updates existing matched contact
-        - LINK_EXISTING: Currently just notes the intended link (needs API method)
+        - LINK_EXISTING: Links existing contact as relative
         """
+        # Map our relationship types to InfoTems relationship types
+        RELATIONSHIP_MAP = {
+            'spouse': 'Spouse',
+            'child': 'Child',
+            'father': 'Father',
+            'mother': 'Mother',
+            'sibling': 'Sibling',
+            'prior_spouse': 'Spouse',  # Will set end_date
+            'son': 'Son',
+            'daughter': 'Daughter',
+            'brother': 'Brother',
+            'sister': 'Sister',
+            'parent': 'Parent',
+        }
+        
         for fm in change_set.family_members:
             fm_result = {
                 'relationship': fm.relationship,
                 'name': fm.display_name,
                 'action': fm.action.value,
                 'contact_id': None,
+                'relationship_id': None,
                 'success': False,
             }
             
@@ -952,33 +978,55 @@ class InfotemsComparator:
                     
                 elif fm.action == FamilyMemberAction.CREATE_NEW:
                     data = fm.final_data
-                    # Uses client.create_contact()
+                    
+                    # Create the family member contact
                     new_id = self.client.create_contact(
                         first_name=data.get('first_name', ''),
                         last_name=data.get('last_name', ''),
                     )
                     fm_result['contact_id'] = new_id
-                    
-                    # TODO: Link as relative when API method is available
-                    # if change_set.contact_id:
-                    #     self.client.add_contact_relative(
-                    #         change_set.contact_id, new_id, fm.relationship
-                    #     )
-                    
-                    fm_result['success'] = True
-                    fm_result['note'] = 'Created but not linked (API method needed)'
                     self.log(f"   ✓ Created {fm.relationship}: {fm.display_name} (ID: {new_id})")
                     
-                elif fm.action == FamilyMemberAction.LINK_EXISTING:
-                    # TODO: Requires add_contact_relative() in InfotemsHybridClient
-                    fm_result['contact_id'] = fm.matched_contact_id
+                    # Link as relative
+                    if change_set.contact_id and new_id:
+                        rel_type = RELATIONSHIP_MAP.get(fm.relationship, 'Other')
+                        rel_kwargs = self._build_relationship_kwargs(fm, data)
+                        
+                        rel_result = self.client.add_contact_relative(
+                            primary_contact_id=change_set.contact_id,
+                            related_to_contact_id=new_id,
+                            related_to_contact_is=rel_type,
+                            **rel_kwargs
+                        )
+                        
+                        if rel_result:
+                            fm_result['relationship_id'] = rel_result.get('Id')
+                            self.log(f"   ✓ Linked as {rel_type}")
+                    
                     fm_result['success'] = True
-                    fm_result['note'] = 'Linking not yet implemented (API method needed)'
-                    self.log(f"   ⚠ Link pending for {fm.relationship}: {fm.display_name}")
+                    
+                elif fm.action == FamilyMemberAction.LINK_EXISTING:
+                    # Link existing contact as relative
+                    if fm.matched_contact_id and change_set.contact_id:
+                        rel_type = RELATIONSHIP_MAP.get(fm.relationship, 'Other')
+                        data = fm.final_data
+                        rel_kwargs = self._build_relationship_kwargs(fm, data)
+                        
+                        rel_result = self.client.add_contact_relative(
+                            primary_contact_id=change_set.contact_id,
+                            related_to_contact_id=fm.matched_contact_id,
+                            related_to_contact_is=rel_type,
+                            **rel_kwargs
+                        )
+                        
+                        fm_result['contact_id'] = fm.matched_contact_id
+                        if rel_result:
+                            fm_result['relationship_id'] = rel_result.get('Id')
+                        fm_result['success'] = True
+                        self.log(f"   ✓ Linked {fm.relationship}: {fm.display_name} as {rel_type}")
                     
                 elif fm.action == FamilyMemberAction.UPDATE_LINKED:
                     if fm.matched_contact_id:
-                        # Build update dict from final data
                         data = fm.final_data
                         updates = {}
                         
@@ -994,7 +1042,6 @@ class InfotemsComparator:
                                 updates[it_key] = data[fm_key]
                         
                         if updates:
-                            # Uses client.update_contact()
                             self.client.update_contact(fm.matched_contact_id, updates)
                         
                         fm_result['contact_id'] = fm.matched_contact_id
@@ -1006,6 +1053,68 @@ class InfotemsComparator:
                 results['errors'].append(f"Family member {fm.display_name}: {e}")
             
             results['family_members'].append(fm_result)
+    
+    def _build_relationship_kwargs(self, fm: FamilyMember, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build kwargs for add_contact_relative() from family member data.
+        
+        Maps extracted questionnaire fields to InfoTems relationship fields.
+        """
+        kwargs = {}
+        
+        # Marriage/relationship dates
+        if data.get('date_of_marriage'):
+            kwargs['start_date'] = data['date_of_marriage']
+        if data.get('date_marriage_ended'):
+            kwargs['end_date'] = data['date_marriage_ended']
+        
+        # Marriage location
+        if data.get('place_of_marriage'):
+            # Try to parse "City, State, Country" format
+            place = data['place_of_marriage']
+            parts = [p.strip() for p in place.split(',')]
+            if len(parts) >= 1:
+                kwargs['start_city'] = parts[0]
+            if len(parts) >= 2:
+                kwargs['start_state'] = parts[1]
+            if len(parts) >= 3:
+                kwargs['start_country'] = parts[2]
+        
+        # Immigration flags
+        if data.get('include_in_application') is not None:
+            kwargs['are_filing_immigration_benefit_together'] = bool(data['include_in_application'])
+        if data.get('resides_with_applicant') is not None:
+            kwargs['does_related_contact_reside_with_primary_contact'] = bool(data['resides_with_applicant'])
+        if data.get('will_accompany') is not None:
+            kwargs['will_related_contact_accompany'] = bool(data['will_accompany'])
+        if data.get('will_immigrate_later') is not None:
+            kwargs['will_related_contact_immigrate_later'] = bool(data['will_immigrate_later'])
+        
+        # For prior spouse, mark as ended
+        if fm.relationship == 'prior_spouse' and 'end_date' not in kwargs:
+            kwargs['are_estranged'] = True
+        
+        return kwargs
+    
+    def get_contact_relatives(self, contact_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all relatives linked to a contact.
+        Uses client.search_contact_relationships() from InfotemsHybridClient.
+        
+        Args:
+            contact_id: The primary contact ID
+            
+        Returns:
+            List of relationship records
+        """
+        try:
+            result = self.client.search_contact_relationships(
+                primary_contact_id=contact_id,
+                per_page=100
+            )
+            return result.get('Items', []) if result else []
+        except Exception:
+            return []
     
     def _apply_history_notes(self, change_set: ChangeSet, results: Dict):
         """
